@@ -14,6 +14,7 @@ import { marketsRouter } from "./routes/markets";
 import { predictionsRouter } from "./routes/predictions";
 import { usersRouter } from "./routes/users";
 import { userPortfolioRouter } from "./routes/users/portfolio";
+import { userStatsRouter } from "./routes/users/stats";
 import { leaderboardRouter } from "./routes/leaderboard";
 import { createDocsRouter } from "./routes/docs";
 import { notificationsRouter } from "./routes/notifications";
@@ -101,6 +102,7 @@ export function createApp(_options?: unknown): express.Express {
   app.use("/api/notifications", notificationsRouter);
   app.use("/api/users", socialRouter);
   app.use("/api/users", userPortfolioRouter);
+  app.use("/api/users", userStatsRouter);
   app.use("/api/users", usersRouter);
   app.use("/api/me/devices", devicesRouter);
   app.use("/api/admin/audit", adminAuditRouter);
