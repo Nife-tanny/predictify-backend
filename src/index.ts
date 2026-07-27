@@ -12,6 +12,7 @@ import { marketsRouter } from "./routes/markets";
 import { commentsRouter } from "./routes/comments";
 import { usersRouter } from "./routes/users";
 import { leaderboardRouter } from "./routes/leaderboard";
+import { predictionsRouter } from "./routes/predictions";
 import { createDocsRouter } from "./routes/docs";
 
 import { errorHandler } from "./middleware/errorHandler";
@@ -83,6 +84,7 @@ export function createApp(): express.Express {
   app.use("/api/markets", commentsRouter);
   app.use("/api/leaderboard", leaderboardRouter);
   app.use("/api/users", usersRouter);
+  app.use("/api/predictions", predictionsRouter);
 
 
   app.get("/metrics", async (req, res) => {

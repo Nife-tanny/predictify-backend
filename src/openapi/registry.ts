@@ -321,6 +321,55 @@ registry.registerPath({
   },
 });
 
+const ClaimRequest = z
+  .object({ marketId: z.string().min(1) })
+  .strict()
+  .openapi("ClaimRequest");
+
+const ClaimResponse = z
+  .object({
+    data: z.object({
+      predictionId: z.string(),
+      result: z.string().nullable(),
+      claimTxHash: z.string().nullable(),
+      claimedAt: z.string().datetime().nullable(),
+    }),
+  })
+  .openapi("ClaimResponse");
+
+registry.registerPath({
+  method: "post",
+  path: "/api/predictions/claim",
+  tags: ["Predictions"],
+  summary: "Claim winnings after market resolution",
+  description:
+    "Builds and submits a Soroban claim transaction for the authenticated user's " +
+    "winning prediction. Idempotent via Idempotency-Key header and internal guard.",
+  security: [{ bearerAuth: [] }],
+  request: {
+    body: { content: { "application/json": { schema: ClaimRequest } } },
+  },
+  responses: {
+    200: {
+      description: "Claim successful (or previously claimed)",
+      content: { "application/json": { schema: ClaimResponse } },
+    },
+    400: {
+      description: "Market not resolved, prediction not winning, or validation error",
+      content: { "application/json": { schema: ErrorBody } },
+    },
+    401: { description: "Unauthorized", content: { "application/json": { schema: ErrorBody } } },
+    404: {
+      description: "Market or prediction not found",
+      content: { "application/json": { schema: ErrorBody } },
+    },
+    500: {
+      description: "Soroban transaction submission failed",
+      content: { "application/json": { schema: ErrorBody } },
+    },
+  },
+});
+
 // ── /api/leaderboard ─────────────────────────────────────────────────────────
 
 const LeaderboardEntry = z

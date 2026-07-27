@@ -128,6 +128,10 @@ export const predictions = pgTable("predictions", {
   status: text("status").notNull().default("pending"),
   /** Set to "won" or "lost" in the same transaction that resolves the parent market. */
   result: text("result"),
+  /** Soroban claim transaction hash — populated after the user claims their winnings. */
+  claimTxHash: text("claim_tx_hash"),
+  /** Timestamp when the claim transaction was submitted. Null until claimed. */
+  claimedAt: timestamp("claimed_at", { withTimezone: true }),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
 });
 
