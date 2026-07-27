@@ -17,22 +17,22 @@ export const reconciliationQueueName = "reconciliation";
 export const marketResolutionQueueName = "market-resolution";
 
 export const webhookQueue = new Queue(webhookQueueName, {
-  // @ts-expect-error IORedis types conflict with BullMQ
+  //  IORedis types conflict with BullMQ
   connection: redisConnection,
 });
 
 export const backupVerificationQueue = new Queue(backupVerificationQueueName, {
-  // @ts-expect-error IORedis types conflict with BullMQ
+  //  IORedis types conflict with BullMQ
   connection: redisConnection,
 });
 
 export const reconciliationQueue = new Queue(reconciliationQueueName, {
-  // @ts-expect-error IORedis types conflict with BullMQ
+  //  IORedis types conflict with BullMQ
   connection: redisConnection,
 });
 
 export const marketResolutionQueue = new Queue(marketResolutionQueueName, {
-  // @ts-expect-error IORedis types conflict with BullMQ
+  //  IORedis types conflict with BullMQ
   connection: redisConnection,
 });
 

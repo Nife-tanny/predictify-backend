@@ -1,12 +1,4 @@
-/**
- * GET /api/me/devices — list active sessions/devices (#214).
- *
- * Each refresh-token "family" represents one logged-in device/session. A
- * device is considered active when it has at least one refresh token that has
- * not been revoked and has not expired. We never return token hashes — only
- * non-sensitive metadata the user needs to recognise and manage a session.
- */
-import { Router, type Response, type NextFunction } from "express";
+import { Router } from "express";
 import { and, eq, gt, isNull } from "drizzle-orm";
 import { db } from "../db";
 import { refreshTokens } from "../db/schema";
@@ -15,7 +7,6 @@ import { AuthenticatedRequest } from "../middleware/auth";
 import { logger } from "../config/logger";
 
 export interface DeviceSummary {
-  /** Session/device identifier (refresh-token family id). */
   id: string;
   createdAt: string;
   expiresAt: string;
@@ -27,7 +18,7 @@ devicesRouter.use(requireAuth);
 
 devicesRouter.get(
   "/",
-  async (req: AuthenticatedRequest, res: Response, next: NextFunction) => {
+  async (req: AuthenticatedRequest, res, next) => {
     try {
       const userId = req.user!.id;
 
@@ -46,8 +37,6 @@ devicesRouter.get(
           ),
         );
 
-      // Collapse the token rows into one entry per device/session family,
-      // keeping the most recent activity for each.
       const byFamily = new Map<string, DeviceSummary>();
       for (const row of rows) {
         const existing = byFamily.get(row.familyId);

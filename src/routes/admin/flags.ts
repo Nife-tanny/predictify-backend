@@ -2,12 +2,10 @@ import { Router } from "express";
 import { rateLimit } from "express-rate-limit";
 import { z } from "zod";
 import { requireAdmin } from "../../middleware/requireAdmin";
-import { getRequestId } from "../../lib/requestContext";
-import { AppError } from "../../errors/AppError";
+import { RouteErrorFactory } from "../../errors";
 import * as featureFlagsService from "../../services/featureFlags";
 
 export interface AdminFlagsRouterOptions {
-  /** Requests per minute per admin token. Default: 60 */
   rateLimitPerMinute?: number;
 }
 
@@ -28,7 +26,6 @@ export function createAdminFlagsRouter(opts: AdminFlagsRouterOptions = {}): Rout
   const router = Router();
   const limit = opts.rateLimitPerMinute ?? 60;
 
-  // ── Rate limiter ────────────────────────────────────────────────────────────
   router.use(
     rateLimit({
       windowMs: 60_000,
@@ -41,10 +38,8 @@ export function createAdminFlagsRouter(opts: AdminFlagsRouterOptions = {}): Rout
     }),
   );
 
-  // ── Admin guard ─────────────────────────────────────────────────────────────
   router.use(requireAdmin);
 
-  // ── GET / ───────────────────────────────────────────────────────────────────
   router.get("/", async (_req, res, next) => {
     try {
       const flags = featureFlagsService.getAllFlags();
@@ -54,12 +49,11 @@ export function createAdminFlagsRouter(opts: AdminFlagsRouterOptions = {}): Rout
     }
   });
 
-  // ── GET /:key ───────────────────────────────────────────────────────────────
   router.get("/:key", async (req, res, next) => {
     try {
       const flag = featureFlagsService.getFlag(req.params.key);
       if (!flag) {
-        throw AppError.notFound(`Feature flag '${req.params.key}' not found`);
+        throw RouteErrorFactory.notFound(`Feature flag '${req.params.key}' not found`);
       }
       res.json({ data: flag });
     } catch (e) {
@@ -67,33 +61,16 @@ export function createAdminFlagsRouter(opts: AdminFlagsRouterOptions = {}): Rout
     }
   });
 
-  // ── POST / ──────────────────────────────────────────────────────────────────
   router.post("/", async (req, res, next) => {
     try {
       const parseResult = createFlagSchema.safeParse(req.body);
       if (!parseResult.success) {
-        const reqId = getRequestId();
-        res.status(400).json({
-          error: {
-            code: "validation_error",
-            message: parseResult.error.issues[0]?.message ?? "invalid payload",
-            requestId: reqId,
-          },
-        });
-        return;
+        throw RouteErrorFactory.validation(parseResult.error.issues[0]?.message ?? "invalid payload");
       }
 
       const existing = featureFlagsService.getFlag(parseResult.data.key);
       if (existing) {
-        const reqId = getRequestId();
-        res.status(400).json({
-          error: {
-            code: "validation_error",
-            message: `Feature flag '${parseResult.data.key}' already exists`,
-            requestId: reqId,
-          },
-        });
-        return;
+        throw RouteErrorFactory.conflict(`Feature flag '${parseResult.data.key}' already exists`);
       }
 
       const newFlag = await featureFlagsService.createFlag(parseResult.data);
@@ -103,25 +80,16 @@ export function createAdminFlagsRouter(opts: AdminFlagsRouterOptions = {}): Rout
     }
   });
 
-  // ── PATCH /:key ─────────────────────────────────────────────────────────────
   router.patch("/:key", async (req, res, next) => {
     try {
       const parseResult = updateFlagSchema.safeParse(req.body);
       if (!parseResult.success) {
-        const reqId = getRequestId();
-        res.status(400).json({
-          error: {
-            code: "validation_error",
-            message: parseResult.error.issues[0]?.message ?? "invalid payload",
-            requestId: reqId,
-          },
-        });
-        return;
+        throw RouteErrorFactory.validation(parseResult.error.issues[0]?.message ?? "invalid payload");
       }
 
       const updated = await featureFlagsService.updateFlag(req.params.key, parseResult.data);
       if (!updated) {
-        throw AppError.notFound(`Feature flag '${req.params.key}' not found`);
+        throw RouteErrorFactory.notFound(`Feature flag '${req.params.key}' not found`);
       }
       res.json({ data: updated });
     } catch (e) {
@@ -129,12 +97,11 @@ export function createAdminFlagsRouter(opts: AdminFlagsRouterOptions = {}): Rout
     }
   });
 
-  // ── DELETE /:key ────────────────────────────────────────────────────────────
   router.delete("/:key", async (req, res, next) => {
     try {
       const deleted = await featureFlagsService.deleteFlag(req.params.key);
       if (!deleted) {
-        throw AppError.notFound(`Feature flag '${req.params.key}' not found`);
+        throw RouteErrorFactory.notFound(`Feature flag '${req.params.key}' not found`);
       }
       res.status(204).send();
     } catch (e) {

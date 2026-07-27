@@ -1,5 +1,5 @@
   
-/* eslint-disable @typescript-eslint/no-unused-vars */ 
+  
 import type { Request, Response, NextFunction } from "express";
 import { env } from "../config/env";
 import { verifyAccessToken } from "../services/jwtService";

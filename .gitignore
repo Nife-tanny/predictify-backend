@@ -10,3 +10,6 @@ coverage
 .vscode
 *.tsbuildinfo
 tests/integration/.container-info.json
+.agents/
+issue.md
+skills-lock.json

@@ -1,54 +1,72 @@
-  
-  
-/* eslint-disable @typescript-eslint/no-explicit-any */ 
 import { Router } from "express";
-import { listMarkets, listUpcomingMarkets, getMarketById, updateMarket, VersionConflictError } from "../services/marketService";
-import { searchMarkets } from "../repositories/marketRepository";
-import { requireAdmin, AuthenticatedRequest } from "../middleware/auth";
-import { rateLimitAnon } from "../middleware/rateLimitAnon";
-import { listFeaturedMarkets } from "../services/marketFeatureService";
-import { z } from "zod";
+import {
+  listMarkets,
+  listUpcomingMarkets,
+  getMarketById,
+  updateMarket,
+  VersionConflictError,
+} from "../../services/marketService";
+import { searchMarkets } from "../../repositories/marketRepository";
+import { requireAdmin, AuthenticatedRequest } from "../../middleware/auth";
+import { rateLimitAnon } from "../../middleware/rateLimitAnon";
+import { accessLog } from "../../middleware/accessLog";
+import { listFeaturedMarkets } from "../../services/marketFeatureService";
 import { logger } from "../../config/logger";
+import { RouteErrorFactory } from "../../errors";
+import { conditionalGet } from "../../middleware/etag";
 import { recommendationsRouter } from "./recommendations";
+import { trendingRouter } from "./trending";
+import { tagsRouter } from "./tags";
+import { predictionCountRouter } from "./prediction-count";
+import { watchersRouter } from "./watchers";
+import { marketAuditRouter } from "../marketAudit";
+import { disputesRouter } from "../disputes";
+import { requestTimeout } from "../../middleware/timeout";
+import {
+  listMarketsQuerySchema,
+  searchMarketsQuerySchema,
+  featuredMarketsQuerySchema,
+  upcomingMarketsQuerySchema,
+  marketParamsSchema,
+  patchMarketBodySchema,
+} from "../../validators/markets";
 
 export const marketsRouter = Router();
 
-import { disputesRouter } from "./disputes";
+marketsRouter.use(accessLog);
+marketsRouter.use(rateLimitAnon);
+marketsRouter.use(requestTimeout(10000));
+marketsRouter.use("/tags", tagsRouter);
+marketsRouter.use("/recommendations", recommendationsRouter);
+marketsRouter.use("/trending", trendingRouter);
+marketsRouter.use("/:id/recommendations", recommendationsRouter);
+marketsRouter.use("/:id/prediction-count", predictionCountRouter);
+marketsRouter.use("/:id/watchers", watchersRouter);
+marketsRouter.use("/:id/audit", marketAuditRouter);
 marketsRouter.use("/:id/disputes", disputesRouter);
 
-marketsRouter.use(rateLimitAnon);
-marketsRouter.use("/trending", trendingRouter);
-
-// Per-market audit log: GET /api/markets/:id/audit (#216)
-marketsRouter.use("/:id/audit", marketAuditRouter);
-
-const patchMarketSchema = z.object({
-  question: z.string().optional(),
-  metadata: z.any().optional(),
-  expectedVersion: z.number().int().nonnegative(),
-}).strict();
-
-marketsRouter.get("/search", async (req, res, next) => {
-  const reqId = String((req as any).id ?? "anon");
+marketsRouter.get("/search", trackMarketsMetrics("search"), async (req, res, next) => {
+  const reqId = String((req as { id?: unknown }).id ?? "anon");
   try {
-    const q = req.query.q as string;
-    if (typeof q !== "string" || !q.trim()) {
-      logger.warn({ reqId, correlationId: reqId, query: req.query }, "markets_search_validation_failed");
-      return res.status(400).json({
-        error: {
-          code: "validation_error",
-          message: "Search query parameter 'q' is required",
-          correlationId: reqId,
-          requestId: reqId,
-        },
-      });
+    const parsed = searchMarketsQuerySchema.safeParse(req.query);
+    if (!parsed.success) {
+      throw parsed.error;
     }
 
-    const limit = parseInt(req.query.limit as string) || 20;
-    const offset = parseInt(req.query.offset as string) || (parseInt(req.query.page as string) > 1 ? (parseInt(req.query.page as string) - 1) * limit : 0);
-    const page = parseInt(req.query.page as string) || Math.floor(offset / limit) + 1;
+    const { q, limit, offset: queryOffset, page: queryPage } = parsed.data;
 
-    logger.info({ reqId, correlationId: reqId, query: q, limit, offset }, "markets_search_executed");
+    const offset =
+      queryOffset !== undefined
+        ? queryOffset
+        : queryPage && queryPage > 1
+          ? (queryPage - 1) * limit
+          : 0;
+    const page = queryPage ?? Math.floor(offset / limit) + 1;
+
+    logger.info(
+      { reqId, correlationId: reqId, query: q, limit, offset },
+      "markets_search_executed",
+    );
 
     const result = await searchMarkets({ query: q, limit, offset });
 
@@ -80,194 +98,145 @@ marketsRouter.get("/search", async (req, res, next) => {
   }
 });
 
-/**
- * GET /api/markets - List active markets with pagination
- *
- * Query Parameters:
- *   - limit: number (1-100, default: 20) - max results per page
- *   - offset: number (default: 0) - pagination offset
- *   - page: number (default: 1) - alternative to offset
- *
- * Validation:
- *   - Returns 400 if limit > 100 or is NaN
- *
- * Logging:
- *   - Includes correlation ID from request context
- *   - Logs validation failures and errors with full context
- */
-marketsRouter.get("/", async (req, res, next) => {
-  const reqId = String((req as any).id ?? "anon");
+marketsRouter.get("/", trackMarketsMetrics("list"), async (req, res, next) => {
+  const reqId = String((req as { id?: unknown }).id ?? "anon");
   try {
-    if (req.query.limit !== undefined && (isNaN(Number(req.query.limit)) || Number(req.query.limit) > 100)) {
-      logger.warn(
-        { reqId, correlationId: reqId, limit: req.query.limit },
-        "markets_list_invalid_limit"
-      );
-      return res.status(400).json({
-        error: {
-          code: "invalid_query",
-          message: "Limit must be a number between 1 and 100",
-          correlationId: reqId,
-        },
-      });
+    const parsed = listMarketsQuerySchema.safeParse(req.query);
+    if (!parsed.success) {
+      throw parsed.error;
     }
 
-    logger.debug({ reqId, correlationId: reqId, limit: req.query.limit }, "markets_list_fetching");
-    const data = await listMarkets();
+    const { limit, cursor, status, category, tag, sort, order } = parsed.data;
 
-    logger.info({ reqId, correlationId: reqId, count: data.length }, "markets_list_success");
-    return res.json({ data });
+    logger.debug(
+      { reqId, correlationId: reqId, limit, hasCursor: !!cursor, status, category, tag, sort, order },
+      "markets_list_fetching",
+    );
+
+    const page = await listMarkets({ limit, cursor });
+    const payload = { data: page.data, nextCursor: page.nextCursor };
+
+    const etagHandled = conditionalGet(payload, req, res);
+    if (etagHandled) {
+      return;
+    }
+
+    logger.info(
+      { reqId, correlationId: reqId, count: page.data.length, hasNext: !!page.nextCursor },
+      "markets_list_success",
+    );
+    return res.status(200).json(payload);
   } catch (e) {
-    logger.error({ reqId, correlationId: reqId, err: e }, "markets_list_failed");
+    logger.error(
+      { reqId, correlationId: reqId, err: e },
+      "markets_list_failed",
+    );
     return next(e);
   }
 });
 
-// Public: curated home-page list. Served ahead of `/:id` so the literal
-// path is matched first.
-marketsRouter.get("/featured", async (req, res, next) => {
+marketsRouter.get("/featured", trackMarketsMetrics("featured"), async (req, res, next) => {
+  const reqId = String((req as { id?: unknown }).id ?? "anon");
   try {
-    const rawLimit = req.query.limit;
-    let parsedLimit: number | undefined;
-    if (rawLimit !== undefined) {
-      const num = Number(rawLimit);
-      if (!Number.isFinite(num) || num < 1 || num > 20) {
-        return res.status(400).json({
-          error: { code: "invalid_query", message: "limit must be an integer between 1 and 20" },
-        });
-      }
-      parsedLimit = Math.floor(num);
+    const parsed = featuredMarketsQuerySchema.safeParse(req.query);
+    if (!parsed.success) {
+      throw parsed.error;
     }
-    const data = await listFeaturedMarkets(parsedLimit);
+
+    const { limit } = parsed.data;
+    const data = await listFeaturedMarkets(limit);
     return res.json({ data });
   } catch (e) {
+    logger.error({ reqId, correlationId: reqId, err: e }, "markets_featured_failed");
     return next(e);
   }
 });
 
-marketsRouter.get("/upcoming", async (req, res, next) => {
-  const reqId = String((req as any).id ?? "anon");
+marketsRouter.get("/upcoming", trackMarketsMetrics("upcoming"), async (req, res, next) => {
+  const reqId = String((req as { id?: unknown }).id ?? "anon");
   try {
-    if (
-      req.query.limit !== undefined &&
-      (isNaN(Number(req.query.limit)) || Number(req.query.limit) < 1 || Number(req.query.limit) > 100)
-    ) {
-      return res.status(400).json({
-        error: { code: "validation_error", message: "limit must be between 1 and 100", requestId: reqId },
-      });
+    const parsed = upcomingMarketsQuerySchema.safeParse(req.query);
+    if (!parsed.success) {
+      throw parsed.error;
     }
-    const limit = req.query.limit !== undefined ? Number(req.query.limit) : 50;
+
+    const { limit } = parsed.data;
     const data = await listUpcomingMarkets({ limit });
-    logger.info({ reqId, correlationId: reqId, count: data.length }, "markets_upcoming_listed");
+    logger.info(
+      { reqId, correlationId: reqId, count: data.length },
+      "markets_upcoming_listed",
+    );
     return res.json({ data });
   } catch (err) {
-    logger.error({ reqId, correlationId: reqId, err }, "markets_upcoming_failed");
+    logger.error(
+      { reqId, correlationId: reqId, err },
+      "markets_upcoming_failed",
+    );
     return next(err);
   }
 });
 
-marketsRouter.get("/:id", async (req, res, next) => {
-  const reqId = String((req as any).id ?? "anon");
-  const marketId = req.params.id as string;
+marketsRouter.get("/:id", trackMarketsMetrics("get"), async (req, res, next) => {
+  const reqId = String((req as { id?: unknown }).id ?? "anon");
 
   try {
-    if (!marketId || typeof marketId !== "string") {
-      logger.warn({ reqId, correlationId: reqId, marketId }, "markets_get_invalid_id");
-      return res.status(400).json({
-        error: {
-          code: "invalid_request",
-          message: "Market ID is required and must be a string",
-          correlationId: reqId,
-        },
-      });
+    const parsedParams = marketParamsSchema.safeParse(req.params);
+    if (!parsedParams.success) {
+      throw parsedParams.error;
     }
 
-    logger.debug({ reqId, correlationId: reqId, marketId }, "markets_get_fetching");
+    const { id: marketId } = parsedParams.data;
+
+    logger.debug(
+      { reqId, correlationId: reqId, marketId },
+      "markets_get_fetching",
+    );
     const market = await getMarketById(marketId);
 
     if (!market) {
-      logger.warn({ reqId, correlationId: reqId, marketId }, "markets_get_not_found");
-      return res.status(404).json({
-        error: {
-          code: "not_found",
-          message: `Market with ID ${marketId} not found`,
-          correlationId: reqId,
-        },
-      });
+      throw RouteErrorFactory.notFound(`Market with ID ${marketId} not found`);
     }
 
-    logger.info({ reqId, correlationId: reqId, marketId }, "markets_get_success");
-    return res.json({ data: market });
+    logger.info(
+      { reqId, correlationId: reqId, marketId },
+      "markets_get_success",
+    );
+
+    const responsePayload = { data: market };
+    if (conditionalGet(responsePayload, req, res)) {
+      return;
+    }
+
+    return res.json(responsePayload);
   } catch (e) {
-    logger.error({ reqId, correlationId: reqId, marketId, err: e }, "markets_get_failed");
+    logger.error(
+      { reqId, correlationId: reqId, marketId: req.params.id, err: e },
+      "markets_get_failed",
+    );
     return next(e);
   }
 });
 
-/**
- * PATCH /api/markets/:id - Update a market (admin only)
- *
- * Authorization:
- *   - Requires admin role via requireAdmin middleware
- *
- * Request Body:
- *   - question?: string - new question text
- *   - metadata?: any - custom metadata object
- *   - expectedVersion: number - current version for optimistic locking
- *
- * Responses:
- *   - 200: Updated market object
- *   - 400: Validation error
- *   - 401: Unauthorized
- *   - 404: Market not found
- *   - 409: Version conflict (stale update)
- *   - 500: Database error
- *
- * Optimistic Locking:
- *   - expectedVersion must match current version
- *   - Version incremented on successful update
- *   - 409 response if version mismatch (prevents lost updates)
- *
- * Audit:
- *   - Change logged in marketAuditLog table
- *   - Includes before/after state and admin address
- *
- * Logging:
- *   - Includes correlation ID, market ID, admin address, and version info
- */
-marketsRouter.patch("/:id", requireAdmin, async (req: AuthenticatedRequest, res, next) => {
-  const reqId = String((req as any).id ?? "anon");
-  const marketId = req.params.id as string;
+marketsRouter.patch("/:id", trackMarketsMetrics("patch"), requireAdmin, async (req: AuthenticatedRequest, res, next) => {
+  const reqId = String((req as { id?: unknown }).id ?? "anon");
   const adminAddress = req.user?.stellarAddress;
 
   try {
-    // Validate schema
-    const parsed = patchMarketSchema.safeParse(req.body);
-    if (!parsed.success) {
-      logger.warn(
-        {
-          reqId,
-          correlationId: reqId,
-          marketId,
-          adminAddress,
-          issues: parsed.error.issues,
-        },
-        "markets_patch_validation_failed"
-      );
-      return res.status(400).json({
-        error: {
-          code: "validation_error",
-          message: "Invalid request body",
-          details: parsed.error.issues,
-          correlationId: reqId,
-        },
-      });
+    const parsedParams = marketParamsSchema.safeParse(req.params);
+    if (!parsedParams.success) {
+      throw parsedParams.error;
     }
 
-    const { question, metadata, expectedVersion } = parsed.data;
+    const { id: marketId } = parsedParams.data;
 
-    // Build patch object
-    const patch: { question?: string; metadata?: any } = {};
+    const parsedBody = patchMarketBodySchema.safeParse(req.body);
+    if (!parsedBody.success) {
+      throw parsedBody.error;
+    }
+
+    const { question, metadata, expectedVersion } = parsedBody.data;
+
+    const patch: { question?: string; metadata?: Record<string, unknown> } = {};
     if (question !== undefined) patch.question = question;
     if (metadata !== undefined) patch.metadata = metadata;
 
@@ -276,14 +245,14 @@ marketsRouter.patch("/:id", requireAdmin, async (req: AuthenticatedRequest, res,
         reqId,
         correlationId: reqId,
         marketId,
-        adminAddress,
+        patch,
         expectedVersion,
-        fieldsUpdated: Object.keys(patch),
+        adminAddress,
       },
-      "markets_patch_updating"
+      "markets_patch_attempt",
     );
 
-    const updated = await updateMarket(marketId, patch, expectedVersion, adminAddress!);
+    const updated = await updateMarket(marketId, patch, expectedVersion);
 
     logger.info(
       {
@@ -293,43 +262,23 @@ marketsRouter.patch("/:id", requireAdmin, async (req: AuthenticatedRequest, res,
         adminAddress,
         newVersion: updated.version,
       },
-      "markets_patch_success"
+      "markets_patch_success",
     );
-    return res.json({ data: updated });
+    return res.status(200).json({ data: updated });
   } catch (e) {
     if (e instanceof VersionConflictError) {
-      logger.warn(
-        {
-          reqId,
-          correlationId: reqId,
-          marketId,
-          adminAddress,
-        },
-        "markets_patch_version_conflict"
-      );
-      return res.status(409).json({
-        error: {
-          code: "version_conflict",
-          message: "Market has been modified by another request. Please refresh and try again.",
-          correlationId: reqId,
-        },
-      });
+      logger.warn({ reqId, correlationId: reqId, marketId: req.params.id, adminAddress }, "markets_patch_version_conflict");
+      throw RouteErrorFactory.conflict("Market has been modified by another request. Please refresh and try again.");
     }
 
-    if ((e as any).status === 404) {
-      logger.warn({ reqId, correlationId: reqId, marketId, adminAddress }, "markets_patch_not_found");
-      return res.status(404).json({
-        error: {
-          code: "not_found",
-          message: `Market with ID ${marketId} not found`,
-          correlationId: reqId,
-        },
-      });
+    if ((e as { status?: number })?.status === 404) {
+      logger.warn({ reqId, correlationId: reqId, marketId: req.params.id, adminAddress }, "markets_patch_not_found");
+      throw RouteErrorFactory.notFound(`Market with ID ${req.params.id} not found`);
     }
 
     logger.error(
-      { reqId, correlationId: reqId, marketId, adminAddress, err: e },
-      "markets_patch_failed"
+      { reqId, correlationId: reqId, marketId: req.params.id, adminAddress, err: e },
+      "markets_patch_failed",
     );
     return next(e);
   }

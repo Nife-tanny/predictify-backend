@@ -19,7 +19,7 @@ jest.mock("../src/db", () => {
 
 jest.mock("../src/middleware/requireAuth", () => ({
   requireAuth: (req: express.Request, _res: express.Response, next: express.NextFunction) => {
-    (req as express.Request & { user: { id: string } }).user = { id: "user-1" };
+    (req as express.Request & { user: { id: string; stellarAddress: string } }).user = { id: "user-1", stellarAddress: "GUSER" };
     next();
   },
 }));

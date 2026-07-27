@@ -30,13 +30,18 @@ import type { Db } from "../db";
 import { webhookDeliveries, webhookSubscriptions } from "../db/schema";
 import { logger } from "../config/logger";
 import { webhookQueue } from "../queue";
-import type { DlqRow, NewDelivery, WebhookDelivery, WebhookStore } from "./webhookStore";
+import type {
+  DlqRow,
+  NewDelivery,
+  WebhookDelivery,
+  WebhookStore,
+} from "./webhookStore";
 
 // ---------------------------------------------------------------------------
 // Public types
 // ---------------------------------------------------------------------------
 
-export interface WebhookDispatcher {
+export interface IWebhookDispatcher {
   replayFromDlq(row: unknown): Promise<unknown>;
 }
 
@@ -70,10 +75,10 @@ export interface AttemptResult {
  * Attempt 4 → last retry; on failure the delivery becomes terminal.
  */
 export const BACKOFF_MS: readonly number[] = [
-  30 * 1_000,        // 30 s
-  5 * 60 * 1_000,    // 5 m
-  60 * 60 * 1_000,   // 1 h
-  6 * 60 * 60 * 1_000,  // 6 h
+  30 * 1_000, // 30 s
+  5 * 60 * 1_000, // 5 m
+  60 * 60 * 1_000, // 1 h
+  6 * 60 * 60 * 1_000, // 6 h
   24 * 60 * 60 * 1_000, // 24 h
 ] as const;
 
@@ -116,7 +121,11 @@ export function signPayload(secret: string, rawBody: Buffer): string {
  *
  * @returns `true` if the signature is valid, `false` otherwise.
  */
-export function verifySignature(secret: string, rawBody: Buffer, signature: string): boolean {
+export function verifySignature(
+  secret: string,
+  rawBody: Buffer,
+  signature: string,
+): boolean {
   // Guard against obviously-wrong signatures before the timing-safe compare.
   if (typeof signature !== "string" || !signature.startsWith("sha256=")) {
     return false;
@@ -160,7 +169,10 @@ export async function dispatchEvent(
 
   const matching = subscriptions.filter((sub) => {
     const events = sub.events as string[];
-    return Array.isArray(events) && (events.includes(eventType) || events.includes("*"));
+    return (
+      Array.isArray(events) &&
+      (events.includes(eventType) || events.includes("*"))
+    );
   });
 
   if (matching.length === 0) {
@@ -356,7 +368,10 @@ export async function createSubscription(
 /**
  * Soft-deletes a subscription by setting `active = false`.
  */
-export async function deactivateSubscription(db: Db, id: string): Promise<void> {
+export async function deactivateSubscription(
+  db: Db,
+  id: string,
+): Promise<void> {
   await db
     .update(webhookSubscriptions)
     .set({ active: false, updatedAt: new Date() })
@@ -514,14 +529,22 @@ export class WebhookDispatcher {
       // preserving the "exactly once" guarantee under concurrent workers.
       if (dlqRow) {
         logger.warn(
-          { deliveryId, dlqId: dlqRow.id, attempts: attempt, lastError: failure },
+          {
+            deliveryId,
+            dlqId: dlqRow.id,
+            attempts: attempt,
+            lastError: failure,
+          },
           "webhook_dead_lettered",
         );
       }
       return "dead-lettered";
     }
 
-    logger.info({ deliveryId, attempt, lastError: failure }, "webhook_retry_scheduled");
+    logger.info(
+      { deliveryId, attempt, lastError: failure },
+      "webhook_retry_scheduled",
+    );
     return "retry";
   }
 

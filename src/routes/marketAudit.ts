@@ -1,11 +1,3 @@
-/**
- * GET /api/markets/:id/audit — per-market audit log (#216).
- *
- * Returns structured audit entries for a single market (admin moderation
- * actions, updates, etc.), newest first, with keyset pagination. The market
- * must exist; otherwise a 404 is returned so callers can distinguish an
- * unknown market from one that simply has no audit history.
- */
 import { Router } from "express";
 import { and, desc, eq, lt, or } from "drizzle-orm";
 import { z } from "zod";
@@ -13,6 +5,8 @@ import { db } from "../db";
 import { markets, marketAuditLog } from "../db/schema";
 import { clampLimit, decodeCursor, encodeCursor } from "../utils/cursor";
 import { logger } from "../config/logger";
+import { RouteErrorFactory } from "../errors";
+import { startAuditSpan, endAuditSpan, recordErrorOnSpan } from "../otel/spans";
 
 const auditQuerySchema = z
   .object({
@@ -27,33 +21,29 @@ const auditQuerySchema = z
 export const marketAuditRouter = Router({ mergeParams: true });
 
 marketAuditRouter.get("/", async (req, res, next) => {
+  const span = startAuditSpan("audit.market.list", req, res);
   const reqId = String((req as { id?: string }).id ?? "anon");
   try {
     const parsed = auditQuerySchema.safeParse(req.query);
     if (!parsed.success) {
-      return res.status(400).json({
-        error: {
-          code: "validation_error",
-          message: parsed.error.issues[0]?.message ?? "invalid query parameters",
-          requestId: reqId,
-        },
-      });
+      throw RouteErrorFactory.validation(parsed.error.issues[0]?.message ?? "invalid query parameters");
     }
 
-    const marketId = req.params.id as string;
+    const marketId = (req.params as Record<string, string>).id;
+    span.setAttribute("market.id", marketId);
+
     const exists = await db
       .select({ id: markets.id })
       .from(markets)
       .where(eq(markets.id, marketId))
       .limit(1);
     if (exists.length === 0) {
-      return res.status(404).json({ error: { code: "not_found" } });
+      throw RouteErrorFactory.notFound("Market not found");
     }
 
     const take = clampLimit(parsed.data.limit);
     const key = decodeCursor(parsed.data.cursor);
 
-    // Keyset predicate for DESC (createdAt, id).
     const cursorPredicate = key
       ? or(
           lt(marketAuditLog.createdAt, new Date(key.sortValue)),
@@ -81,6 +71,7 @@ marketAuditRouter.get("/", async (req, res, next) => {
 
     logger.info({ reqId, marketId, count: data.length }, "market_audit_listed");
 
+    endAuditSpan(span, res);
     return res.json({
       data,
       nextCursor:
@@ -89,6 +80,7 @@ marketAuditRouter.get("/", async (req, res, next) => {
           : null,
     });
   } catch (err) {
+    recordErrorOnSpan(span, err);
     return next(err);
   }
 });

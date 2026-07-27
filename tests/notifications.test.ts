@@ -6,6 +6,10 @@ jest.mock("../src/middleware/requireAuth", () => ({
   },
 }));
 
+jest.mock("../src/middleware/idempotency", () => ({
+  idempotency: jest.fn((req: any, _res: any, next: any) => next()),
+}));
+
 jest.mock("../src/services/notificationPrefs", () => ({
   getNotificationPreferences: jest.fn(),
   patchNotificationPreferences: jest.fn(),
@@ -21,6 +25,7 @@ import {
   getNotificationPreferences,
   patchNotificationPreferences,
 } from "../src/services/notificationPrefs";
+import { idempotency } from "../src/middleware/idempotency";
 
 const mockGetNotificationPreferences =
   getNotificationPreferences as jest.MockedFunction<typeof getNotificationPreferences>;
@@ -104,5 +109,6 @@ describe("notifications preferences routes", () => {
       payload.preferences,
     );
     expect(res.body.data.preferences).toHaveLength(6);
+    expect(idempotency).toHaveBeenCalled();
   });
 });

@@ -162,6 +162,91 @@ describe("GET /api/admin/audit", () => {
     });
   });
 
+  describe("POST /api/admin/audit/search", () => {
+    it("returns 403 with no Authorization header", async () => {
+      const res = await request(makeApp()).post("/api/admin/audit/search").send({});
+      expect(res.status).toBe(403);
+      expect(res.body).toEqual({ error: { code: "forbidden" } });
+    });
+
+    it("returns 400 for invalid payload parameters", async () => {
+      const res = await request(makeApp())
+        .post("/api/admin/audit/search")
+        .set("Authorization", `Bearer ${adminJwt}`)
+        .send({ limit: -5 });
+      expect(res.status).toBe(400);
+      expect(res.body.error.code).toBe("validation_error");
+      expect(res.body.error.message).toContain("limit must be a positive integer");
+    });
+
+    it("returns 400 for invalid date string format", async () => {
+      const res = await request(makeApp())
+        .post("/api/admin/audit/search")
+        .set("Authorization", `Bearer ${adminJwt}`)
+        .send({ startDate: "invalid-date" });
+      expect(res.status).toBe(400);
+      expect(res.body.error.code).toBe("validation_error");
+      expect(res.body.error.message).toContain("startDate must be a valid ISO 8601 datetime string");
+    });
+
+    it("calls getAuditLogs with correct filter mappings via JSON body", async () => {
+      const mockResult = {
+        data: [
+          {
+            id: "2",
+            action: "user.login",
+            walletAddress: USER_ADDRESS,
+            ip: "127.0.0.1",
+            correlationId: "corr-2",
+            rateLimitContext: null,
+            createdAt: new Date("2026-06-27T12:00:00Z"),
+          },
+        ],
+        nextCursor: "next-abc",
+      };
+      mockGetAuditLogs.mockResolvedValue(mockResult);
+
+      const startDateStr = "2026-06-27T00:00:00.000Z";
+      const endDateStr = "2026-06-27T23:59:59.000Z";
+
+      const res = await request(makeApp())
+        .post("/api/admin/audit/search")
+        .set("Authorization", `Bearer ${adminJwt}`)
+        .send({
+          action: "user.login",
+          actor: USER_ADDRESS,
+          startDate: startDateStr,
+          endDate: endDateStr,
+          limit: 10,
+          cursor: "abc",
+        });
+
+      expect(res.status).toBe(200);
+      expect(mockGetAuditLogs).toHaveBeenCalledWith({
+        action: "user.login",
+        actor: USER_ADDRESS,
+        startDate: new Date(startDateStr),
+        endDate: new Date(endDateStr),
+        limit: 10,
+        cursor: "abc",
+      });
+      expect(res.body).toEqual({
+        data: [
+          {
+            id: "2",
+            action: "user.login",
+            walletAddress: USER_ADDRESS,
+            ip: "127.0.0.1",
+            correlationId: "corr-2",
+            rateLimitContext: null,
+            createdAt: "2026-06-27T12:00:00.000Z",
+          },
+        ],
+        nextCursor: "next-abc",
+      });
+    });
+  });
+
   describe("GET /api/admin/audit/export", () => {
     it("returns 403 with no Authorization header", async () => {
       const res = await request(makeApp()).get("/api/admin/audit/export");

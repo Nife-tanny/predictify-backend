@@ -15,9 +15,11 @@ export const pool = new Pool({
   max: env.PG_POOL_MAX,
 });
 
-pool.on("error", (err) => {
-  logger.error({ err }, "Unexpected pool error");
-});
+if (typeof pool.on === "function") {
+  pool.on("error", (err) => {
+    logger.error({ err }, "Unexpected pool error");
+  });
+}
 
 export const db = drizzle(pool, { schema });
 

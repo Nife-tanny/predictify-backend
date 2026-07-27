@@ -1,15 +1,16 @@
+/* eslint-disable @typescript-eslint/no-explicit-any */
 import { invalidateMarketCache } from "../cache/marketsCache";
 import { db, getDb } from "../db/client";
-import { markets, marketAuditLog } from "../db/schema";
-import { and, asc, eq, gt, inArray } from "drizzle-orm";
+import { markets, marketAuditLog, predictions } from "../db/schema";
+import { and, asc, eq, inArray, desc, notInArray, sql, or, lt } from "drizzle-orm";
 import { emitMarketEvent, LogEvent } from "../logging/events";
+import { decodeCursor, encodeCursor, type Page } from "../utils/cursor";
 
 export interface Market {
   id: string;
   question: string;
   status: string;
   resolutionTime: Date;
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   metadata: any;
   indexedLedger: number;
   archived: boolean;
@@ -25,39 +26,96 @@ export class VersionConflictError extends Error {
   }
 }
 
+/** Statuses that represent a market that has not yet opened for predictions. */
+export const UPCOMING_MARKET_STATUSES = ["upcoming", "pending", "scheduled"] as const;
+
 /**
- * Lists active markets with pagination.
+ * Lists non-archived markets with cursor pagination.
  *
- * @param options.limit - Number of results to return (default: 50)
- * @param options.offset - Pagination offset (default: 0)
- * @returns Array of markets formatted with ISO timestamps
+ * Sort order: (createdAt DESC, id DESC) - newest markets first, with the
+ * unique id tie-breaker providing stable ordering within the same timestamp.
+ *
+ * Keyset WHERE predicate for DESC ordering:
+ *   (createdAt < cursorTime)
+ *   OR (createdAt = cursorTime AND id < cursorId)
+ *
+ * @param options.limit - Number of results to return (default: 20, max: 100)
+ * @param options.cursor - Opaque cursor token from the previous page's nextCursor
+ * @returns Page of markets formatted with ISO timestamps
  * @throws Error if database query fails
  */
-export async function listMarkets(options: { limit?: number; offset?: number } = {}): Promise<any[]> {
-  const limit = options.limit ?? 50;
-  const offset = options.offset ?? 0;
+export async function listMarkets(
+  options: { limit?: number; cursor?: string } = {},
+): Promise<Page<{
+  id: string;
+  question: string;
+  status: string;
+  resolutionTime: string;
+}>> {
+  const limit = options.limit ?? 20;
+  const cursor = options.cursor;
 
+  // Build WHERE conditions - always exclude archived markets.
+  const conditions = [eq(markets.archived, false)];
+
+  // Decode cursor and append keyset predicate for DESC (createdAt, id).
+  const cursorKey = decodeCursor(cursor);
+  if (cursorKey) {
+    const cursorTime = new Date(cursorKey.sortValue);
+    conditions.push(
+      or(
+        lt(markets.createdAt, cursorTime),
+        and(
+          eq(markets.createdAt, cursorTime),
+          lt(markets.id, cursorKey.id),
+        ),
+      )!,
+    );
+  }
+
+  // Fetch limit+1 rows so we can detect whether a next page exists.
   const rows = await getDb()
     .select({
       id: markets.id,
       question: markets.question,
       status: markets.status,
       resolutionTime: markets.resolutionTime,
+      createdAt: markets.createdAt,
     })
     .from(markets)
-    .where(eq(markets.archived, false))
-    .orderBy(asc(markets.resolutionTime), asc(markets.id))
-    .limit(limit)
-    .offset(offset);
+    .where(and(...conditions))
+    .orderBy(desc(markets.createdAt), desc(markets.id))
+    .limit(limit + 1);
 
   if (!Array.isArray(rows)) {
     throw new Error("Unexpected response from database: rows is not an array");
   }
 
-  return rows.map((r: any) => ({
-    ...r,
-    resolutionTime: r.resolutionTime instanceof Date ? r.resolutionTime.toISOString() : r.resolutionTime,
-  }));
+  const hasMore = rows.length > limit;
+  const data = rows.slice(0, limit);
+
+  // Mint next-page cursor from the last row on this page.
+  const last = data[data.length - 1];
+  const nextCursor =
+    hasMore && last
+      ? encodeCursor({
+          sortValue: last.createdAt.toISOString(),
+          id: last.id,
+        })
+      : null;
+
+  return {
+    data: data.map((r) => ({
+      id: r.id,
+      question: r.question,
+      status: r.status,
+      resolutionTime:
+        r.resolutionTime instanceof Date
+          ? r.resolutionTime.toISOString()
+          : r.resolutionTime,
+    })),
+    nextCursor,
+  };
 }
 
 /**
@@ -67,7 +125,7 @@ export async function listMarkets(options: { limit?: number; offset?: number } =
  * @returns Market object with formatted timestamp, or null if not found
  * @throws Error if database query fails
  */
-export async function getMarketById(id: string): Promise<any | null> {
+export async function getMarketById(id: string) {
   if (!id || typeof id !== "string") {
     throw new Error("Market ID must be a non-empty string");
   }
@@ -78,6 +136,7 @@ export async function getMarketById(id: string): Promise<any | null> {
       question: markets.question,
       status: markets.status,
       resolutionTime: markets.resolutionTime,
+      version: markets.version,
     })
     .from(markets)
     .where(eq(markets.id, id))
@@ -94,8 +153,120 @@ export async function getMarketById(id: string): Promise<any | null> {
   const r = rows[0];
   return {
     ...r,
-    resolutionTime: r.resolutionTime instanceof Date ? r.resolutionTime.toISOString() : r.resolutionTime,
+    resolutionTime:
+      r.resolutionTime instanceof Date
+        ? r.resolutionTime.toISOString()
+        : r.resolutionTime,
   };
+}
+
+/**
+ * Lists upcoming markets — markets that are queued to be created/opened from
+ * oracle events but are not yet active. Results are ordered by soonest resolution time first.
+ */
+export async function listUpcomingMarkets(
+  options: { limit?: number; now?: Date } = {},
+): Promise<any[]> {
+  const limit = Math.min(Math.max(options.limit ?? 50, 1), 100);
+  const rows = await getDb()
+    .select({
+      id: markets.id,
+      question: markets.question,
+      status: markets.status,
+      resolutionTime: markets.resolutionTime,
+    })
+    .from(markets)
+    .where(
+      and(
+        eq(markets.archived, false),
+        or(
+          eq(markets.status, "upcoming"),
+          inArray(markets.status, UPCOMING_MARKET_STATUSES as unknown as string[]),
+        ),
+      ),
+    )
+    .orderBy(asc(markets.resolutionTime), asc(markets.id))
+    .limit(limit);
+
+  if (!Array.isArray(rows)) {
+    return [];
+  }
+
+  return rows.map((r: any) => ({
+    ...r,
+    resolutionTime:
+      r.resolutionTime instanceof Date ? r.resolutionTime.toISOString() : r.resolutionTime,
+  }));
+}
+
+export async function getRecommendedMarkets(userId: string): Promise<any[]> {
+  const userPredictions = await getDb()
+    .select({ marketId: predictions.marketId })
+    .from(predictions)
+    .where(eq(predictions.userId, userId));
+
+  const historyIds = userPredictions.map((p: { marketId: string }) => p.marketId);
+
+  let recommendedMarkets: any[] = [];
+
+  if (historyIds.length > 0) {
+    const historyMarkets = await getDb()
+      .select({ question: markets.question })
+      .from(markets)
+      .where(inArray(markets.id, historyIds));
+
+    const keywords = historyMarkets
+      .flatMap((m: { question: string }) => m.question.toLowerCase().split(/\W+/))
+      .filter((w: string) => w.length > 3)
+      .slice(0, 10);
+
+    if (keywords.length > 0) {
+      const conditions = keywords.map((k: string) => sql`question ILIKE ${"%" + k + "%"}`);
+      recommendedMarkets = await getDb()
+        .select({
+          id: markets.id,
+          question: markets.question,
+          status: markets.status,
+          resolutionTime: markets.resolutionTime,
+        })
+        .from(markets)
+        .where(
+          and(
+            eq(markets.archived, false),
+            eq(markets.status, "active"),
+            notInArray(markets.id, historyIds),
+            sql`(${sql.join(conditions, sql` OR `)})`
+          )
+        )
+        .orderBy(desc(markets.resolutionTime))
+        .limit(10);
+    }
+  }
+
+  if (recommendedMarkets.length === 0) {
+    recommendedMarkets = await getDb()
+      .select({
+        id: markets.id,
+        question: markets.question,
+        status: markets.status,
+        resolutionTime: markets.resolutionTime,
+      })
+      .from(markets)
+      .where(
+        and(
+          eq(markets.archived, false),
+          eq(markets.status, "active"),
+          historyIds.length > 0 ? notInArray(markets.id, historyIds) : sql`TRUE`
+        )
+      )
+      .orderBy(desc(markets.resolutionTime))
+      .limit(10);
+  }
+
+  return recommendedMarkets.map((r: any) => ({
+    ...r,
+    resolutionTime: r.resolutionTime instanceof Date ? r.resolutionTime.toISOString() : r.resolutionTime,
+  }));
 }
 
 /**
@@ -116,11 +287,9 @@ export async function getMarketById(id: string): Promise<any | null> {
  */
 export async function updateMarket(
   id: string,
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   patch: { question?: string; metadata?: any },
   expectedVersion: number,
-  adminAddress: string
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  adminAddress?: string,
 ): Promise<any> {
   if (!id || typeof id !== "string") {
     throw new Error("Market ID must be a non-empty string");
@@ -130,15 +299,14 @@ export async function updateMarket(
     throw new Error("expectedVersion must be a non-negative number");
   }
 
-  if (!adminAddress || typeof adminAddress !== "string") {
-    throw new Error("adminAddress must be a non-empty string");
-  }
-
   const result = await db.transaction(async (tx) => {
-    const existing = await tx.select().from(markets).where(eq(markets.id, id)).limit(1);
+    const existing = await tx
+      .select()
+      .from(markets)
+      .where(eq(markets.id, id))
+      .limit(1);
     if (existing.length === 0) {
       const err = new Error("Market not found");
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
       (err as any).status = 404;
       throw err;
     }
@@ -158,21 +326,23 @@ export async function updateMarket(
       .where(eq(markets.id, id))
       .returning();
 
-    await tx.insert(marketAuditLog).values({
-      marketId: id,
-      adminAddress,
-      action: "update",
-      beforeState: {
-        question: currentMarket.question,
-        metadata: currentMarket.metadata,
-        version: currentMarket.version,
-      },
-      afterState: {
-        question: updated[0].question,
-        metadata: updated[0].metadata,
-        version: updated[0].version,
-      },
-    });
+    if (adminAddress) {
+      await tx.insert(marketAuditLog).values({
+        marketId: id,
+        adminAddress,
+        action: "update",
+        beforeState: {
+          question: currentMarket.question,
+          metadata: currentMarket.metadata,
+          version: currentMarket.version,
+        },
+        afterState: {
+          question: updated[0].question,
+          metadata: updated[0].metadata,
+          version: updated[0].version,
+        },
+      });
+    }
 
     // Invalidate related cache entries
     await invalidateMarketCache(id);
@@ -182,7 +352,7 @@ export async function updateMarket(
   // Structured log event – emitted from service layer after successful commit.
   emitMarketEvent(LogEvent.MARKET_UPDATED, {
     marketId: id,
-    actor: adminAddress,
+    actor: adminAddress ?? "system",
     version: result.version,
     fieldsUpdated: Object.keys(patch),
   });

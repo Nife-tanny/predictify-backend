@@ -9,7 +9,7 @@ metricsRouter.get("/", async (_req, res) => {
   if (metricsAuthToken) {
     const header = _req.headers.authorization;
     if (!header || header !== `Bearer ${metricsAuthToken}`) {
-      res.status(401).json({ error: { code: "unauthorized", message: "Invalid or missing metrics token" } });
+      res.status(401).json({ error: { type: "Unauthorized", message: "Invalid or missing metrics token" } });
       return;
     }
   }

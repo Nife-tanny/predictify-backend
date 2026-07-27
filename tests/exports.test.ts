@@ -66,7 +66,7 @@ import { createApp } from "../src/index";
 
 const app = createApp();
 
-function signToken(userId = TEST_USER_ID, stellarAddress = TEST_STELLAR): string {
+function signToken(_userId = TEST_USER_ID, stellarAddress = TEST_STELLAR): string {
   return jwt.sign({ sub: stellarAddress }, TEST_SECRET, {
     algorithm: "HS256",
     issuer: TEST_ISSUER,

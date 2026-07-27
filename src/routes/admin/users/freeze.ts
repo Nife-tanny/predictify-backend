@@ -1,15 +1,3 @@
-/**
- * Admin user-freeze router.
- *
- *   GET    /api/admin/users/:address/freeze  — read current freeze status
- *   POST   /api/admin/users/:address/freeze  — freeze a user (block further bets)
- *   DELETE /api/admin/users/:address/freeze  — lift the freeze
- *
- * Every route requires a valid admin JWT (role: "admin") and is rate-limited
- * per admin token. The Stellar address is validated at the boundary and all
- * failures use the standard error envelope.
- */
-
 import { Router } from "express";
 import { rateLimit } from "express-rate-limit";
 import { z } from "zod";
@@ -21,9 +9,9 @@ import {
   freezeUser,
   unfreezeUser,
 } from "../../../services/userFreezeService";
+import { RouteErrorFactory } from "../../../errors";
 
 export interface AdminFreezeRouterOptions {
-  /** Requests per minute per admin token. Default: 60 */
   rateLimitPerMinute?: number;
 }
 
@@ -38,14 +26,7 @@ const freezeBodySchema = z
   .strict()
   .optional();
 
-function validationError(res: import("express").Response, message: string): void {
-  res.status(400).json({
-    error: { code: "validation_error", message, requestId: getRequestId() },
-  });
-}
-
 export function createAdminFreezeRouter(opts: AdminFreezeRouterOptions = {}): Router {
-  // mergeParams so the :address segment from the parent mount is visible here.
   const router = Router({ mergeParams: true });
   const limit = opts.rateLimitPerMinute ?? 60;
 
@@ -63,44 +44,56 @@ export function createAdminFreezeRouter(opts: AdminFreezeRouterOptions = {}): Ro
 
   router.use(requireAdmin);
 
-  router.get("/:address/freeze", (req, res) => {
-    const parsed = stellarAddressSchema.safeParse(req.params.address);
-    if (!parsed.success) {
-      return validationError(res, "invalid stellar address");
+  router.get("/:address/freeze", (req, res, next) => {
+    try {
+      const parsed = stellarAddressSchema.safeParse(req.params.address);
+      if (!parsed.success) {
+        throw RouteErrorFactory.validation("invalid stellar address");
+      }
+      return res.json({ data: getFreezeStatus(parsed.data) });
+    } catch (e) {
+      next(e);
     }
-    return res.json({ data: getFreezeStatus(parsed.data) });
   });
 
-  router.post("/:address/freeze", (req, res) => {
-    const parsed = stellarAddressSchema.safeParse(req.params.address);
-    if (!parsed.success) {
-      return validationError(res, "invalid stellar address");
-    }
-    const body = freezeBodySchema.safeParse(req.body);
-    if (!body.success) {
-      return validationError(res, body.error.issues[0]?.message ?? "invalid body");
-    }
+  router.post("/:address/freeze", (req, res, next) => {
+    try {
+      const parsed = stellarAddressSchema.safeParse(req.params.address);
+      if (!parsed.success) {
+        throw RouteErrorFactory.validation("invalid stellar address");
+      }
+      const body = freezeBodySchema.safeParse(req.body);
+      if (!body.success) {
+        throw RouteErrorFactory.validation(body.error.issues[0]?.message ?? "invalid body");
+      }
 
-    const record = freezeUser(parsed.data, req.adminAddress!, body.data?.reason ?? null);
-    logger.info(
-      { reqId: getRequestId(), address: parsed.data, actor: req.adminAddress },
-      "user_frozen",
-    );
-    return res.json({ data: record });
+      const record = freezeUser(parsed.data, req.adminAddress!, body.data?.reason ?? null);
+      logger.info(
+        { reqId: getRequestId(), address: parsed.data, actor: req.adminAddress },
+        "user_frozen",
+      );
+      return res.json({ data: record });
+    } catch (e) {
+      next(e);
+    }
   });
 
-  router.delete("/:address/freeze", (req, res) => {
-    const parsed = stellarAddressSchema.safeParse(req.params.address);
-    if (!parsed.success) {
-      return validationError(res, "invalid stellar address");
-    }
+  router.delete("/:address/freeze", (req, res, next) => {
+    try {
+      const parsed = stellarAddressSchema.safeParse(req.params.address);
+      if (!parsed.success) {
+        throw RouteErrorFactory.validation("invalid stellar address");
+      }
 
-    const record = unfreezeUser(parsed.data, req.adminAddress!);
-    logger.info(
-      { reqId: getRequestId(), address: parsed.data, actor: req.adminAddress },
-      "user_unfrozen",
-    );
-    return res.json({ data: record });
+      const record = unfreezeUser(parsed.data, req.adminAddress!);
+      logger.info(
+        { reqId: getRequestId(), address: parsed.data, actor: req.adminAddress },
+        "user_unfrozen",
+      );
+      return res.json({ data: record });
+    } catch (e) {
+      next(e);
+    }
   });
 
   return router;

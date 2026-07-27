@@ -38,6 +38,47 @@ describe("OpenAPI spec generation", () => {
     expect(paths).toContain("/api/admin/markets/{id}/feature");
   });
 
+  it("includes example responses for the markets endpoints", () => {
+    const paths = spec.paths ?? {};
+    const listMarketsOp = (paths["/api/markets"] as Record<string, unknown>)?.get as Record<string, unknown>;
+    const detailMarketsOp = (paths["/api/markets/{id}"] as Record<string, unknown>)?.get as Record<string, unknown>;
+
+    const listResponse = (listMarketsOp?.responses as Record<string, unknown>)?.["200"] as Record<string, unknown>;
+    const detailResponse = (detailMarketsOp?.responses as Record<string, unknown>)?.["200"] as Record<string, unknown>;
+    const listJsonContent = (listResponse?.content as Record<string, unknown>)?.["application/json"] as Record<string, unknown>;
+    const detailJsonContent = (detailResponse?.content as Record<string, unknown>)?.["application/json"] as Record<string, unknown>;
+
+    expect(listJsonContent?.examples).toBeDefined();
+    expect(detailJsonContent?.examples).toBeDefined();
+
+    const listExample = (listJsonContent?.examples as Record<string, unknown>)?.default as Record<string, unknown>;
+    const detailExample = (detailJsonContent?.examples as Record<string, unknown>)?.default as Record<string, unknown>;
+
+    expect(listExample?.value).toEqual(
+      expect.objectContaining({
+        data: expect.arrayContaining([
+          expect.objectContaining({
+            id: expect.any(String),
+            question: expect.any(String),
+            status: expect.any(String),
+            version: expect.any(Number),
+          }),
+        ]),
+      }),
+    );
+
+    expect(detailExample?.value).toEqual(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          id: expect.any(String),
+          question: expect.any(String),
+          status: expect.any(String),
+          version: expect.any(Number),
+        }),
+      }),
+    );
+  });
+
   it("defines reusable component schemas", () => {
     const schemas = spec.components?.schemas ?? {};
     expect(schemas["ErrorBody"]).toBeDefined();
@@ -72,6 +113,7 @@ describe("OpenAPI spec generation", () => {
     const marketRecommendations = (paths["/api/markets/recommendations"] as Record<string, unknown>)
       ?.get as Record<string, unknown>;
     expect(patchMarket?.security).toEqual([{ bearerAuth: [] }]);
+    expect(marketRecommendations?.security).toEqual([{ bearerAuth: [] }]);
 
     const meRoute = (paths["/api/users/me"] as Record<string, unknown>)
       ?.get as Record<string, unknown>;

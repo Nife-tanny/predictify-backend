@@ -117,10 +117,13 @@ export const markets = pgTable("markets", {
   featured: boolean("featured").notNull().default(false),
   featuredAt: timestamp("featured_at", { withTimezone: true }),
   featuredBy: text("featured_by"),
+  forceFinalized: boolean("force_finalized").notNull().default(false),
+  createdAt: timestamp("created_at", { withTimezone: true })
+    .notNull()
+    .defaultNow(),
 });
 
 export const marketAuditLog = pgTable("market_audit_log", {
-  id: uuid("id").primaryKey().defaultRandom(),
   marketId: text("market_id")
     .notNull()
     .references(() => markets.id),
@@ -250,6 +253,25 @@ export const adminAuditLog = pgTable("admin_audit_log", {
     .defaultNow(),
 });
 
+export const marketComments = pgTable("market_comments", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  marketId: text("market_id").notNull().references(() => markets.id, {
+    onDelete: "cascade",
+  }),
+
+  authorId: uuid("author_id").references(() => users.id, {
+    onDelete: "set null",
+  }),
+  authorAddress: text("author_address"),
+
+  body: text("body").notNull(),
+
+  moderationFlagged: boolean("moderation_flagged").notNull().default(false),
+  moderationReason: text("moderation_reason"),
+
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+});
+
 export const indexerCursor = pgTable("indexer_cursor", {
   id: integer("id").primaryKey(),
   lastLedger: integer("last_ledger").notNull(),
@@ -258,6 +280,11 @@ export const indexerCursor = pgTable("indexer_cursor", {
     .defaultNow(),
 });
 
+
+/**
+ * Stores idempotency keys for POST/PATCH mutation replay.
+ * Rows are purged after 24 h by the sweeper job.
+ */
 export const contractEvents = pgTable("contract_events", {
   id: uuid("id").primaryKey().defaultRandom(),
   contractId: text("contract_id").notNull(),
@@ -277,6 +304,8 @@ export const indexerEvents = pgTable("indexer_events", {
   createdAt: timestamp("created_at", { withTimezone: true })
     .notNull()
     .defaultNow(),
+  marketId: text("market_id"),
+  data: jsonb("data"),
 });
 
 export type IndexerEvent = typeof indexerEvents.$inferSelect;
@@ -323,6 +352,31 @@ export const notificationPreferences = pgTable(
   }),
 );
 
+export const notifications = pgTable(
+  "notifications",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    userId: uuid("user_id")
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
+    type: text("type").notNull(),
+    title: text("title").notNull(),
+    body: text("body").notNull(),
+    data: jsonb("data").notNull().default({}),
+    readAt: timestamp("read_at", { withTimezone: true }),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+  },
+  (t) => ({
+    notificationsUserIdIdx: index("notifications_user_id_idx").on(t.userId),
+    notificationsUserIdReadAtIdx: index("notifications_user_id_read_at_idx").on(
+      t.userId,
+      t.readAt,
+    ),
+  }),
+);
+
 export const auditLogs = pgTable(
   "audit_logs",
   {
@@ -345,6 +399,26 @@ export const auditLogs = pgTable(
 );
 
 // ---------------------------------------------------------------------------
+// Plugins (admin-managed CRUD)
+// ---------------------------------------------------------------------------
+
+export const plugins = pgTable("plugins", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  name: text("name").notNull().unique(),
+  description: text("description"),
+  enabled: boolean("enabled").notNull().default(true),
+  config: jsonb("config").notNull().default({}),
+  createdAt: timestamp("created_at", { withTimezone: true })
+    .notNull()
+    .defaultNow(),
+  updatedAt: timestamp("updated_at", { withTimezone: true })
+    .notNull()
+    .defaultNow(),
+});
+
+export type Plugin = typeof plugins.$inferSelect;
+
+// ---------------------------------------------------------------------------
 // Feature Flags
 // ---------------------------------------------------------------------------
 export const featureFlags = pgTable("feature_flags", {
@@ -356,3 +430,159 @@ export const featureFlags = pgTable("feature_flags", {
     .notNull()
     .defaultNow(),
 });
+
+// ---------------------------------------------------------------------------
+// Schema Versions
+// ---------------------------------------------------------------------------
+/**
+ * schema_versions — per-migration checksum registry.
+ *
+ * Each row tracks a single applied Drizzle migration by recording:
+ *   - `version`    — the migration tag (file name without extension), PRIMARY KEY.
+ *   - `checksum`   — hex-encoded SHA-256 of the migration SQL at apply time.
+ *                    64 lower-case hex characters.
+ *   - `appliedAt`  — timestamp at which the row was first written.
+ *   - `appliedBy`  — optional identifier for the process/agent that ran the migration
+ *                    (CI job name, DB user, etc.).
+ *
+ * Drift detection: compare stored checksums against the current file contents.
+ * A mismatch means the migration was modified after it was applied.
+ */
+export const schemaVersions = pgTable(
+  "schema_versions",
+  {
+    version: text("version").primaryKey(),
+    checksum: text("checksum").notNull(),
+    appliedAt: timestamp("applied_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+    appliedBy: text("applied_by"),
+  },
+  (t) => ({
+    schemaVersionsAppliedAtIdx: index("schema_versions_applied_at_idx").on(
+      t.appliedAt,
+    ),
+  }),
+);
+
+export type SchemaVersion = typeof schemaVersions.$inferSelect;
+export type NewSchemaVersion = typeof schemaVersions.$inferInsert;
+
+// ---------------------------------------------------------------------------
+// Quota Requests (user self-service quota increases)
+// ---------------------------------------------------------------------------
+
+/**
+ * quota_requests — user-submitted requests to increase their rate limits.
+ *
+ * Each row represents a single request from a user asking for a higher
+ * cap on a specific quota dimension (e.g. prediction_limit).  Admins
+ * review these and update status + review fields.
+ *
+ * `(user_id, status = 'pending')` is checked at creation time to enforce
+ * a per-user cap on concurrent pending requests (see MAX_PENDING_REQUESTS
+ * in the route layer).
+ */
+export const quotaRequests = pgTable(
+  "quota_requests",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    userId: uuid("user_id")
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
+    quotaType: text("quota_type").notNull(),
+    requestedValue: integer("requested_value").notNull(),
+    reason: text("reason").notNull(),
+    status: text("status").notNull().default("pending"),
+    reviewedBy: text("reviewed_by"),
+    reviewNotes: text("review_notes"),
+    reviewedAt: timestamp("reviewed_at", { withTimezone: true }),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+  },
+  (t) => ({
+    quotaRequestsUserIdIdx: index("quota_requests_user_id_idx").on(t.userId),
+    quotaRequestsStatusIdx: index("quota_requests_status_idx").on(t.status),
+  }),
+);
+
+export type QuotaRequest = typeof quotaRequests.$inferSelect;
+export type NewQuotaRequest = typeof quotaRequests.$inferInsert;
+
+export type Notification = typeof notifications.$inferSelect;
+export type NewNotification = typeof notifications.$inferInsert;
+
+// ---------------------------------------------------------------------------
+// Scheduled Reports
+// ---------------------------------------------------------------------------
+/**
+ * scheduled_reports — user-configured recurring report exports.
+ *
+ * Each row represents a single scheduled report configuration owned by a user.
+ * The scheduler runs these configurations according to their cron expressions.
+ */
+export const scheduledReports = pgTable(
+  "scheduled_reports",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    userId: uuid("user_id")
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
+    reportType: text("report_type").notNull(),
+    schedule: text("schedule").notNull(),
+    format: text("format").notNull(),
+    filters: jsonb("filters").default({}),
+    active: boolean("active").notNull().default(true),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+  },
+  (t) => ({
+    scheduledReportsUserIdIdx: index("scheduled_reports_user_id_idx").on(t.userId),
+    scheduledReportsActiveIdx: index("scheduled_reports_active_idx").on(t.active),
+  }),
+);
+
+export type ScheduledReport = typeof scheduledReports.$inferSelect;
+export type NewScheduledReport = typeof scheduledReports.$inferInsert;
+
+// ---------------------------------------------------------------------------
+// Market Watchers
+// ---------------------------------------------------------------------------
+/**
+ * market_watchers — tracks users watching/subscribed to a market.
+ */
+export const marketWatchers = pgTable(
+  "market_watchers",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    marketId: text("market_id")
+      .notNull()
+      .references(() => markets.id, { onDelete: "cascade" }),
+    userId: uuid("user_id")
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+  },
+  (t) => ({
+    marketWatchersMarketIdIdx: index("market_watchers_market_id_idx").on(t.marketId),
+    marketWatchersUserIdIdx: index("market_watchers_user_id_idx").on(t.userId),
+    marketWatchersMarketUserIdx: index("market_watchers_market_user_idx").on(
+      t.marketId,
+      t.userId,
+    ),
+  }),
+);
+
+export type MarketWatcher = typeof marketWatchers.$inferSelect;
+export type NewMarketWatcher = typeof marketWatchers.$inferInsert;
+

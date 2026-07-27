@@ -1,5 +1,8 @@
 import { Worker, Job } from "bullmq";
-import { performReconciliation, reconcileMarket } from "../services/reconciliationService";
+import {
+  performReconciliation,
+  reconcileMarket,
+} from "../services/reconciliationService";
 import { logger } from "../config/logger";
 import { redisConnection, reconciliationQueueName } from "../queue";
 
@@ -22,21 +25,37 @@ export class ReconciliationWorker {
   start(): void {
     if (this.worker) return;
 
-    logger.info({ concurrency: this.concurrency }, "reconciliation.worker.start");
+    logger.info(
+      { concurrency: this.concurrency },
+      "reconciliation.worker.start",
+    );
 
     this.worker = new Worker(
       reconciliationQueueName,
       async (job: Job<ReconciliationJobPayload>) => {
         const data = job.data;
-        logger.info({ jobId: job.id, type: data.type }, "reconciliation: processing job");
+        logger.info(
+          { jobId: job.id, type: data.type },
+          "reconciliation: processing job",
+        );
 
         if (data.type === "global") {
           const result = await performReconciliation();
-          logger.info({ jobId: job.id }, "reconciliation: global reconciliation completed");
+          logger.info(
+            { jobId: job.id },
+            "reconciliation: global reconciliation completed",
+          );
           return result;
         } else if (data.type === "market") {
-          if (!data.marketId || !data.adminAddress || !data.ip || !data.correlationId) {
-            throw new Error("Missing required parameters for market reconciliation");
+          if (
+            !data.marketId ||
+            !data.adminAddress ||
+            !data.ip ||
+            !data.correlationId
+          ) {
+            throw new Error(
+              "Missing required parameters for market reconciliation",
+            );
           }
           const result = await reconcileMarket({
             marketId: data.marketId,
@@ -54,10 +73,10 @@ export class ReconciliationWorker {
         }
       },
       {
-        // @ts-expect-error IORedis types conflict with BullMQ
+        // IORedis types conflict with BullMQ
         connection: redisConnection,
         concurrency: this.concurrency,
-      }
+      },
     );
 
     this.worker.on("failed", (job, err) => {

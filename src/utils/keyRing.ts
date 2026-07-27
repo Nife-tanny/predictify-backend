@@ -42,8 +42,10 @@ function buildKeyRing(): KeyRing {
   const keys = new Map<string, JwtKey>();
   keys.set(DEFAULT_KID, { kid: DEFAULT_KID, secret: env.JWT_SECRET });
 
-  if (env.JWT_KEYS && env.JWT_KEYS.trim().length > 0) {
-    for (const key of parseJwtKeysEnv(env.JWT_KEYS)) {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const jwtKeys = (env as any).JWT_KEYS as string | undefined;
+  if (jwtKeys && jwtKeys.trim().length > 0) {
+    for (const key of parseJwtKeysEnv(jwtKeys)) {
       if (keys.has(key.kid)) {
         throw new Error(
           `Duplicate kid "${key.kid}" in JWT_KEYS (kid "${DEFAULT_KID}" is reserved for JWT_SECRET)`,
@@ -53,7 +55,8 @@ function buildKeyRing(): KeyRing {
     }
   }
 
-  const activeKid = env.JWT_ACTIVE_KID?.trim() || DEFAULT_KID;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const activeKid = ((env as any).JWT_ACTIVE_KID as string | undefined)?.trim() || DEFAULT_KID;
   if (!keys.has(activeKid)) {
     throw new Error(
       `JWT_ACTIVE_KID "${activeKid}" does not match any loaded JWT key. Loaded kids: ${[...keys.keys()].join(", ")}`,

@@ -51,14 +51,14 @@ const userToken  = sign({ sub: USER_ADDR,  role: "user" });
 
 // ── Stub factories ────────────────────────────────────────────────────────────
 
-function makePool(overrides: Partial<PoolLike> = {}): PoolLike {
+function makePool(overrides: any = {}): PoolLike {
   return {
     totalCount: 10,
     idleCount: 7,
     waitingCount: 0,
     query: async () => ({ rows: [{ last_ledger: 1000 }] }),
     ...overrides,
-  };
+  } as any;
 }
 
 function makeRpc(latestLedger = 1050): RpcLike {

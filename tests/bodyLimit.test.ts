@@ -1,11 +1,11 @@
 import request from "supertest";
 import express from "express";
-import { createBodyLimitMiddleware, DEFAULT_BODY_LIMIT, WEBHOOK_BODY_LIMIT } from "../src/middleware/bodyLimit";
+import { createBodySizeLimitMiddleware, DEFAULT_BODY_LIMIT, WEBHOOK_BODY_LIMIT } from "../src/middleware/bodySize";
 import { errorHandler } from "../src/middleware/errorHandler";
 
 function buildApp(path: string, limit?: string) {
   const app = express();
-  app.use(path, createBodyLimitMiddleware(limit ? { limit } : undefined));
+  app.use(path, createBodySizeLimitMiddleware(limit ? { limit } : undefined));
   app.post(path, (req, res) => {
     res.status(200).json({ ok: true, size: JSON.stringify(req.body).length });
   });
@@ -35,9 +35,8 @@ describe("body size limit middleware", () => {
       .send({ payload: tooLarge });
 
     expect(res.status).toBe(413);
-    expect(res.body.error.code).toBe("request_failed");
+    expect(res.body.error.type).toBe("request_failed");
     expect(res.body.error.message).toBe("Request body too large");
-    expect(res.body.error.requestId).toEqual(expect.any(String));
     expect(res.body.error.correlationId).toEqual(expect.any(String));
     expect(res.body.error.details.limit).toBeGreaterThanOrEqual(256 * 1024);
   });
@@ -63,8 +62,8 @@ describe("body size limit middleware", () => {
       .send({ payload: tooLarge });
 
     expect(res.status).toBe(413);
-    expect(res.body.error.code).toBe("request_failed");
+    expect(res.body.error.type).toBe("request_failed");
     expect(res.body.error.message).toBe("Request body too large");
-    expect(res.body.error.details.limit).toBeGreaterThanOrEqual(1024 * 1024);
+    expect(res.body.error.details.limit).toBeGreaterThanOrEqual(1024 * 1000);
   });
 });

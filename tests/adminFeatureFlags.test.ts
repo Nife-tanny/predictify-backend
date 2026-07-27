@@ -1,3 +1,12 @@
+jest.mock("../src/db/client", () => ({ db: {} }));
+jest.mock("../src/queue", () => ({
+  redisConnection: { on: jest.fn() },
+  webhookQueue: { add: jest.fn() },
+  backupVerificationQueue: { add: jest.fn() },
+  reconciliationQueue: { add: jest.fn() },
+  marketResolutionQueue: { add: jest.fn() },
+}));
+
 import request from "supertest";
 import express from "express";
 import jwt from "jsonwebtoken";
@@ -5,8 +14,11 @@ import { createAdminFeatureFlagsRouter } from "../src/routes/admin/feature-flags
 import { resetFeatureFlagsForTests } from "../src/services/featureFlagService";
 import { errorHandler } from "../src/middleware/errorHandler";
 
-// Prevent a real DB connection at import time.
-jest.mock("../src/db/client", () => ({ db: {} }));
+let createApp: typeof import("../src/index").createApp;
+
+beforeAll(async () => {
+  createApp = (await import("../src/index")).createApp;
+});
 
 const SECRET = process.env.JWT_SECRET || "test-jwt-secret-that-is-at-least-32-chars!!";
 const ISSUER = process.env.JWT_ISSUER || "predictify";
@@ -41,6 +53,13 @@ describe("admin feature-flags CRUD", () => {
       .get("/api/admin/feature-flags")
       .set("Authorization", `Bearer ${userJwt}`);
     expect(res.status).toBe(403);
+  });
+
+  it("is mounted in the application router", async () => {
+    const app = createApp();
+    const res = await auth(request(app).get("/api/admin/feature-flags"));
+    expect(res.status).toBe(200);
+    expect(Array.isArray(res.body.data)).toBe(true);
   });
 
   it("creates, reads, lists, updates and deletes a flag", async () => {

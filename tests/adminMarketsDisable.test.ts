@@ -26,7 +26,7 @@ import {
 const mockDisable = disableMarket as jest.MockedFunction<typeof disableMarket>;
 
 function adminJwt(): string {
-  return jwt.sign({ sub: "GADMIN" }, process.env.JWT_SECRET as string, {
+  return jwt.sign({ sub: "GADMIN", role: "admin" }, process.env.JWT_SECRET as string, {
     issuer: process.env.JWT_ISSUER,
     audience: process.env.JWT_AUDIENCE,
     expiresIn: "1h",
@@ -59,7 +59,7 @@ describe("POST /api/admin/markets/disable", () => {
     const res = await request(makeApp())
       .post("/api/admin/markets/disable")
       .send({ marketId: "m1", reason: "spam" });
-    expect(res.status).toBe(401);
+    expect(res.status).toBe(403);
   });
 
   it("validates the body", async () => {

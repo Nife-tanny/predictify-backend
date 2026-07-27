@@ -8,7 +8,11 @@ import {
 } from "../services/marketResolutionService";
 import { db } from "../db";
 import { logger } from "../config/logger";
-import { redisConnection, marketResolutionQueue, marketResolutionQueueName } from "../queue";
+import {
+  redisConnection,
+  marketResolutionQueue,
+  marketResolutionQueueName,
+} from "../queue";
 
 export type { MarketResolvedEvent };
 
@@ -39,7 +43,10 @@ export class MarketResolverWorker {
   start(): void {
     if (this.worker) return;
 
-    logger.info({ concurrency: this.concurrency }, "market_resolver.worker.start");
+    logger.info(
+      { concurrency: this.concurrency },
+      "market_resolver.worker.start",
+    );
 
     this.worker = new Worker(
       marketResolutionQueueName,
@@ -50,7 +57,11 @@ export class MarketResolverWorker {
           "market_resolver: processing job",
         );
 
-        const { processed } = await resolveMarket(this.repo, event, this.emitWebhook);
+        const { processed } = await resolveMarket(
+          this.repo,
+          event,
+          this.emitWebhook,
+        );
 
         if (processed) {
           logger.info(
@@ -60,10 +71,10 @@ export class MarketResolverWorker {
         }
       },
       {
-        // @ts-expect-error IORedis types conflict with BullMQ
+        // IORedis types conflict with BullMQ
         connection: redisConnection,
         concurrency: this.concurrency,
-      }
+      },
     );
 
     this.worker.on("failed", (job, err) => {

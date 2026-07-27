@@ -93,12 +93,12 @@ if (require.main === module) {
   fraudDetectorWorker
     .runOnce()
     .then((res) => {
-      // eslint-disable-next-line no-console
+       
       console.log("fraud_scan", res);
       process.exit(0);
     })
     .catch((err) => {
-      // eslint-disable-next-line no-console
+       
       console.error(err);
       process.exit(1);
     });

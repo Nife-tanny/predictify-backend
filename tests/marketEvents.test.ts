@@ -15,6 +15,8 @@ describe("toStreamEvent", () => {
       eventType: "prediction",
       data: { outcome: "yes", amount: "100" },
       ledger: 12345,
+      txHash: "mock-tx-hash",
+      opIndex: 0,
       createdAt: new Date("2025-06-01T12:00:00Z"),
     };
     const result = toStreamEvent(row);
@@ -31,6 +33,8 @@ describe("toStreamEvent", () => {
       eventType: "resolved",
       data: null,
       ledger: 100,
+      txHash: "mock-tx-hash",
+      opIndex: 0,
       createdAt: new Date("2025-06-01T12:00:00Z"),
     };
     const result = toStreamEvent(row);

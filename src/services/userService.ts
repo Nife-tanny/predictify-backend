@@ -1,7 +1,44 @@
+import { db } from "../db";
+import { users, predictions } from "../db/schema";
+import { eq, count } from "drizzle-orm";
+
+// ── Types ─────────────────────────────────────────────────────────────────
+
+/** Aggregate totals for the authenticated user's dashboard. */
+export interface ProfileTotals {
+  /** Total number of predictions the user has placed. */
+  totalPredictions: number;
+  /** Total amount staked across all predictions (string for precision). */
+  totalAmountStaked: string;
+  /** Number of predictions that won. */
+  wins: number;
+  /** Number of predictions that lost. */
+  losses: number;
+}
+
+/**
+ * Response shape for `GET /api/users/me`.  All timestamps are serialised to
+ * ISO-8601 strings so the wire format is stable across runtimes.
+ */
+export interface UserProfile {
+  /** Internal UUID (opaque to external consumers). */
+  id: string;
+  /** The user's on-chain Stellar address (G...). */
+  stellarAddress: string;
+  /** Account creation timestamp (ISO-8601). */
+  createdAt: string;
+  /** Ordered newest-first list of predictions. */
+  predictions: PredictionEntry[];
+  /** Aggregate counters for the user's activity on the platform. */
+  totals: ProfileTotals;
+}
+
+/** One entry in the public prediction history. */
 import { db } from "../db/client";
 import { users, predictions, markets } from "../db/schema";
-import { and, eq, desc, lt, count } from "drizzle-orm";
+import { and, eq, desc, lt, or, count } from "drizzle-orm";
 import { Result, ok, err } from "../errors/RouteError";
+import { encodeCursor, decodeCursor, Page, clampLimit, DEFAULT_PAGE_SIZE } from "../utils/cursor";
 
 // ── Types ─────────────────────────────────────────────────────────────────
 
@@ -18,6 +55,19 @@ export interface PredictionEntry {
   createdAt: string;
 }
 
+// ── Service functions ─────────────────────────────────────────────────────
+
+/**
+ * Look up a public user profile by Stellar address.
+ *
+ * Returns `null` when no user with that address exists.
+ *
+ * @param stellarAddress - The Stellar account address to look up.
+ */
+export async function getUserProfile(
+  stellarAddress: string,
+): Promise<UserProfile | null> {
+  // Stub: always returns null until the DB layer is wired up.
 export interface ProfileTotals {
   totalPredictions: number;
   totalAmountStaked: string;
@@ -40,6 +90,13 @@ export async function getUserProfile(
   return null;
 }
 
+/**
+ * Returns the authenticated user's profile (stellarAddress, createdAt) along
+ * with aggregate counts of their predictions.  Two queries run in parallel.
+ *
+ * Throws if the user row no longer exists (TOCTOU race).
+ */
+export async function getCurrentUserProfile(userId: string): Promise<UserProfile> {
 export interface CurrentUserProfile {
   stellarAddress: string;
   createdAt: string;
@@ -61,6 +118,7 @@ export async function getCurrentUserProfile(userId: string): Promise<Result<Curr
   const [userRow, predCountRow] = await Promise.all([
     db
       .select({
+        id: users.id,
         stellarAddress: users.stellarAddress,
         createdAt: users.createdAt,
       })
@@ -82,12 +140,21 @@ export async function getCurrentUserProfile(userId: string): Promise<Result<Curr
     });
   }
 
+  const totalPredictions = Number(predCountRow[0]?.value ?? 0);
+
+  return {
+    id: user.id,
   const prediction_count = Number(predCountRow[0]?.value ?? 0);
 
   return ok({
     stellarAddress: user.stellarAddress,
     createdAt: user.createdAt.toISOString(),
+    predictions: [],
     totals: {
+      totalPredictions,
+      totalAmountStaked: "0",
+      wins: 0,
+      losses: 0,
       prediction_count,
       claim_count: 0,
     },
@@ -100,29 +167,77 @@ export async function getUserByAddress(address: string) {
   });
 }
 
+/**
+ * Serialised shape of a single prediction row returned to callers.
+ */
+export interface UserPredictionRow {
+  id: string;
+  marketId: string;
+  question: string;
+  outcome: string;
+  amount: string;
+  status: string;
+  createdAt: string;
+  resolutionTime: string;
+}
+
+/**
+ * Fetch one page of predictions for a user using keyset (cursor) pagination.
+ *
+ * Sort order: (createdAt DESC, id DESC) — stable even when two predictions
+ * share the same timestamp because the UUID tie-breaker is unique.
+ *
+ * Cursor format: the shared `encodeCursor` / `decodeCursor` helpers in
+ * `src/utils/cursor.ts` encode `{ sortValue: createdAt ISO-string, id }` as a
+ * versioned, opaque base64url token.  A cursor minted under a different schema
+ * version is silently treated as absent (restart from page one) rather than
+ * causing a wrong-offset query or a 500.
+ *
+ * Keyset WHERE clause for DESC ordering:
+ *   (createdAt < cursorTime) OR (createdAt = cursorTime AND id < cursorId)
+ *
+ * This is the standard two-column keyset predicate: rows that sort strictly
+ * after the last item on the previous page, respecting both columns of the
+ * composite sort key.
+ */
 export async function getUserPredictions(
   userId: string,
   opts: {
     status?: string;
     limit: number;
     cursor?: string;
-  }
-) {
+  },
+): Promise<Page<UserPredictionRow>> {
   const { status, limit, cursor } = opts;
 
-  const whereConditions = [eq(predictions.userId, userId)];
+  // Base conditions — always scope to this user.
+  const baseConditions = [eq(predictions.userId, userId)];
 
   if (status) {
-    whereConditions.push(eq(predictions.status, status));
+    baseConditions.push(eq(predictions.status, status));
   }
 
-  if (cursor) {
-    const [cursorTime] = cursor.split("|");
-    if (cursorTime) {
-      whereConditions.push(lt(predictions.createdAt, new Date(cursorTime)));
-    }
+  // Decode the opaque cursor.  An invalid or version-mismatched token is
+  // treated as absent so a tampered ?cursor= value never causes a 500.
+  const cursorKey = decodeCursor(cursor);
+
+  if (cursorKey) {
+    const cursorTime = new Date(cursorKey.sortValue);
+    // Standard two-column keyset predicate for DESC (createdAt, id) ordering:
+    //   rows where createdAt is strictly earlier, OR same timestamp with a
+    //   lexicographically smaller UUID (which is also numerically earlier).
+    baseConditions.push(
+      or(
+        lt(predictions.createdAt, cursorTime),
+        and(
+          eq(predictions.createdAt, cursorTime),
+          lt(predictions.id, cursorKey.id),
+        ),
+      )!,
+    );
   }
 
+  // Fetch one extra row to determine whether a next page exists.
   const results = await db
     .select({
       id: predictions.id,
@@ -136,18 +251,21 @@ export async function getUserPredictions(
     })
     .from(predictions)
     .innerJoin(markets, eq(predictions.marketId, markets.id))
-    .where(and(...whereConditions))
+    .where(and(...baseConditions))
     .orderBy(desc(predictions.createdAt), desc(predictions.id))
     .limit(limit + 1);
 
   const hasMore = results.length > limit;
   const data = results.slice(0, limit);
 
-  let nextCursor = null;
-  if (hasMore && data.length > 0) {
-    const last = data[data.length - 1];
-    nextCursor = `${last.createdAt.toISOString()}|${last.id}`;
-  }
+  // Encode the cursor from the last row on this page using the shared helper,
+  // which stamps the current CURSOR_VERSION into the token so stale cursors
+  // are rejected after schema migrations rather than silently mis-paginating.
+  const last = data[data.length - 1];
+  const nextCursor =
+    hasMore && last
+      ? encodeCursor({ sortValue: last.createdAt.toISOString(), id: last.id })
+      : null;
 
   return {
     data: data.map((r) => ({
@@ -156,5 +274,77 @@ export async function getUserPredictions(
       resolutionTime: r.resolutionTime.toISOString(),
     })),
     nextCursor,
+  };
+}
+
+// ── listUsers ──────────────────────────────────────────────────────────────
+
+/**
+ * Serialised shape of a single user row returned by GET /api/users.
+ */
+export interface UserListRow {
+  id: string;
+  stellarAddress: string;
+  createdAt: string;
+}
+
+/**
+ * Return a cursor-paginated list of all users, sorted DESC by (createdAt, id)
+ * for stable ordering even when two users share the same timestamp.
+ *
+ * Cursor format: opaque base64url token encoding `{ sortValue: createdAt ISO,
+ * id }` via the shared `encodeCursor` / `decodeCursor` helpers in
+ * `src/utils/cursor.ts`.  A missing, tampered, or version-mismatched cursor
+ * is silently treated as absent (restart from page one) rather than 500-ing.
+ *
+ * Keyset WHERE clause for DESC (createdAt, id):
+ *   (createdAt < cursorTime) OR (createdAt = cursorTime AND id < cursorId)
+ *
+ * Fetch limit + 1 rows so we can detect whether a next page exists without
+ * a separate COUNT query.
+ */
+export async function listUsers(opts: {
+  cursor?: string;
+  limit?: number;
+}): Promise<Page<UserListRow>> {
+  const limit = clampLimit(opts.limit ?? DEFAULT_PAGE_SIZE);
+  const cursorKey = decodeCursor(opts.cursor);
+
+  const conditions: ReturnType<typeof eq>[] = [];
+
+  if (cursorKey) {
+    const cursorTime = new Date(cursorKey.sortValue);
+    conditions.push(
+      or(
+        lt(users.createdAt, cursorTime),
+        and(eq(users.createdAt, cursorTime), lt(users.id, cursorKey.id)),
+      )! as ReturnType<typeof eq>,
+    );
+  }
+
+  const rows = await db
+    .select({
+      id: users.id,
+      stellarAddress: users.stellarAddress,
+      createdAt: users.createdAt,
+    })
+    .from(users)
+    .where(conditions.length ? and(...conditions) : undefined)
+    .orderBy(desc(users.createdAt), desc(users.id))
+    .limit(limit + 1);
+
+  const hasMore = rows.length > limit;
+  const data = rows.slice(0, limit);
+  const last = data[data.length - 1];
+
+  return {
+    data: data.map((r) => ({
+      ...r,
+      createdAt: r.createdAt.toISOString(),
+    })),
+    nextCursor:
+      hasMore && last
+        ? encodeCursor({ sortValue: last.createdAt.toISOString(), id: last.id })
+        : null,
   };
 }

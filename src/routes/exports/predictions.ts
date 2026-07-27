@@ -1,4 +1,4 @@
-import { Router, Request, Response, NextFunction } from "express";
+import { Router } from "express";
 import { z } from "zod";
 import crypto from "crypto";
 import { eq, gt, and } from "drizzle-orm";
@@ -12,10 +12,10 @@ import {
   getPredictionsStream,
   formatPredictionAsCsv,
 } from "../../services/exportService";
+import { RouteErrorFactory } from "../../errors";
 
 export const exportsPredictionsRouter = Router();
 
-// Apply requireAuth to secure all export endpoints
 exportsPredictionsRouter.use(requireAuth);
 
 const exportQuerySchema = z
@@ -54,9 +54,9 @@ const exportQuerySchema = z
   );
 
 async function handleExport(
-  req: Request,
-  res: Response,
-  next: NextFunction,
+  req: import("express").Request,
+  res: import("express").Response,
+  next: import("express").NextFunction,
 ): Promise<void> {
   const reqId =
     getRequestId() ??
@@ -68,7 +68,6 @@ async function handleExport(
   const userId = (req as AuthenticatedRequest).user!.id;
 
   try {
-    // 1. Validate Input
     const queryData = {
       format: req.query.format ?? req.body?.format,
       startDate: req.query.startDate ?? req.body?.startDate,
@@ -82,16 +81,13 @@ async function handleExport(
       endDate: parsed.endDate,
     };
 
-    // 2. Validate & Handle Idempotency-Key
     const key = req.headers["idempotency-key"];
     let fingerprint = "";
     if (key !== undefined) {
       if (typeof key !== "string" || key.length > 255 || !/^[\x20-\x7E]+$/.test(key)) {
-        res.status(400).json({ error: { code: "invalid_idempotency_key" } });
-        return;
+        throw RouteErrorFactory.badRequest("Invalid idempotency key");
       }
 
-      // Compute fingerprint based on userId, format, and date parameters
       const fingerprintData = JSON.stringify({
         userId,
         format,
@@ -118,8 +114,7 @@ async function handleExport(
             { reqId, key, userId },
             "idempotency_conflict_detected",
           );
-          res.status(409).json({ error: { code: "idempotency_conflict" } });
-          return;
+          throw RouteErrorFactory.conflict("Idempotency key conflict");
         }
 
         logger.info({ reqId, key, userId }, "idempotency_cache_hit_replay");
@@ -136,7 +131,6 @@ async function handleExport(
       }
     }
 
-    // 3. Set up Stream Response Headers
     const contentType =
       format === "csv" ? "text/csv" : "application/json";
     const filename = `predictions-${userId}-${Date.now()}.${format}`;
@@ -145,7 +139,6 @@ async function handleExport(
     res.setHeader("Transfer-Encoding", "chunked");
     res.status(200);
 
-    // 4. Stream predictions chunk-by-chunk
     const stream = getPredictionsStream(userId, filters, reqId);
     let buffer = "";
 
@@ -189,9 +182,8 @@ async function handleExport(
 
     res.end();
 
-    // 5. Persist to Idempotency Cache if Key was provided
     if (key) {
-      const TTL_MS = 24 * 60 * 60 * 1000; // 24 hours
+      const TTL_MS = 24 * 60 * 60 * 1000;
       const expiresAt = new Date(Date.now() + TTL_MS);
       await db
         .insert(idempotencyRecords)

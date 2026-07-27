@@ -12,7 +12,7 @@
  * real database or network connection.
  */
 
-import type { Pool } from "pg";
+// import type { Pool } from "pg";
 import { env } from "../config/env";
 import { logger } from "../config/logger";
 
@@ -83,7 +83,9 @@ const PROBE_TIMEOUT_MS = 5_000;
 function withTimeout<T>(p: Promise<T>, fallback: T): Promise<T> {
   return Promise.race([
     p,
-    new Promise<T>((resolve) => setTimeout(() => resolve(fallback), PROBE_TIMEOUT_MS)),
+    new Promise<T>((resolve) =>
+      setTimeout(() => resolve(fallback), PROBE_TIMEOUT_MS),
+    ),
   ]);
 }
 
@@ -168,7 +170,11 @@ async function checkRpc(rpc: RpcLike): Promise<RpcCheck> {
   const start = Date.now();
   try {
     const { sequence } = await rpc.getLatestLedger();
-    return { status: "ok", latencyMs: Date.now() - start, latestLedger: sequence };
+    return {
+      status: "ok",
+      latencyMs: Date.now() - start,
+      latestLedger: sequence,
+    };
   } catch (err) {
     logger.warn({ err }, "admin_health_rpc_check_failed");
     return {

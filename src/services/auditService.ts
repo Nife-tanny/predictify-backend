@@ -46,6 +46,10 @@ export interface AuditEntryInput {
   correlationId?: string;
   /** Optional rate-limit context to enrich the entry */
   rateLimitContext?: RateLimitContext;
+  /** The state before the action took place */
+  beforeState?: Record<string, unknown> | null;
+  /** The state after the action took place */
+  afterState?: Record<string, unknown> | null;
 }
 
 // ---------------------------------------------------------------------------
@@ -71,6 +75,8 @@ export async function createAuditLog(input: AuditEntryInput): Promise<string> {
     ip: input.ip,
     correlationId,
     rateLimitContext: input.rateLimitContext ?? null,
+    beforeState: input.beforeState ?? null,
+    afterState: input.afterState ?? null,
   };
 
   try {
@@ -84,6 +90,8 @@ export async function createAuditLog(input: AuditEntryInput): Promise<string> {
         walletAddress: entry.walletAddress,
         ip: entry.ip,
         rateLimitContext: entry.rateLimitContext,
+        beforeState: entry.beforeState,
+        afterState: entry.afterState,
       },
       "audit_log_created",
     );

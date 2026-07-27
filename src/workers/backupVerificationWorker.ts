@@ -1,5 +1,9 @@
 import { Worker, Job } from "bullmq";
-import { createDefaultBackupVerifier, BackupVerifier, BackupVerificationResult } from "./backupVerifier";
+import {
+  createDefaultBackupVerifier,
+  BackupVerifier,
+  BackupVerificationResult,
+} from "./backupVerifier";
 import { logger } from "../config/logger";
 import { redisConnection, backupVerificationQueueName } from "../queue";
 
@@ -19,7 +23,10 @@ export class BackupVerificationWorker {
   start(): void {
     if (this.worker) return;
 
-    logger.info({ concurrency: this.concurrency }, "backup_verification.worker.start");
+    logger.info(
+      { concurrency: this.concurrency },
+      "backup_verification.worker.start",
+    );
 
     this.worker = new Worker(
       backupVerificationQueueName,
@@ -32,14 +39,17 @@ export class BackupVerificationWorker {
           throw new Error(result.error || "Backup verification failed");
         }
 
-        logger.info({ jobId: job.id, runId: result.runId }, "backup_verification: completed successfully");
+        logger.info(
+          { jobId: job.id, runId: result.runId },
+          "backup_verification: completed successfully",
+        );
         return result;
       },
       {
-        // @ts-expect-error IORedis types conflict with BullMQ
+        // IORedis types conflict with BullMQ
         connection: redisConnection,
         concurrency: this.concurrency,
-      }
+      },
     );
 
     this.worker.on("failed", (job, err) => {
