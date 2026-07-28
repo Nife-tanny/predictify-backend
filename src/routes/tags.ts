@@ -1,6 +1,8 @@
 import { Router } from "express";
+import { accessLog } from "../middleware/accessLog";
 
 export const tagsRouter = Router();
+tagsRouter.use(accessLog);
 
 /**
  * @openapi
