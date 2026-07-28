@@ -127,8 +127,8 @@ export function accessLog(req: Request, res: Response, next: NextFunction): void
       logName = "predictions_access_log";
     } else if (req.originalUrl.startsWith("/api/markets")) {
       logName = "markets_access_log";
-    } else if (req.originalUrl.startsWith("/api/tags")) {
-      logName = "tags_access_log";
+    } else if (req.originalUrl.startsWith("/api/feature-flags")) {
+      logName = "feature_flags_access_log";
     }
 
     const durationMs = Date.now() - startMs;

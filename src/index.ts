@@ -28,6 +28,7 @@ import { usersHealthRouter } from "./routes/users/health";
 import { userPortfolioRouter } from "./routes/users/portfolio";
 import { userStatsRouter } from "./routes/users/stats";
 import { devicesRouter } from "./routes/devices";
+import { featureFlagsRouter } from "./routes/feature-flags";
 import { adminFeatureFlagsRouter } from "./routes/admin/featureFlags";
 import { adminUsersRouter } from "./routes/adminUsers";
 import { adminNotesRouter } from "./routes/admin/users/notes";
@@ -185,6 +186,7 @@ export function createApp(_options: CreateAppOptions = {}): express.Express {
   app.use("/api/audit/counts", auditCountsRouter);
   app.use("/api/admin/users", adminUsersRouter);
   app.use("/api/admin/users", adminNotesRouter);
+  app.use("/api/feature-flags", featureFlagsRouter);
   app.use("/api/admin/feature-flags", adminFeatureFlagsRouter);
   app.use("/api/admin/markets", adminMarketsRouter);
   app.use("/api/admin/schema-versions", adminSchemaVersionsRouter);
