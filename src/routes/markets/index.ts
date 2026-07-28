@@ -32,7 +32,9 @@ import {
   patchMarketBodySchema,
 } from "../../validators/markets";
 
-import type { RequestHandler } from "express";
+function trackMarketsMetrics(_action: string) {
+  return (_req: any, _res: any, next: any) => next();
+}
 
 export const marketsRouter = Router();
 

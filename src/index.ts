@@ -17,6 +17,7 @@ import { dependenciesRouter } from "./routes/health/dependencies";
 import { versionRouter } from "./routes/health/version";
 import { redisConnection } from "./queue";
 import { authRouter } from "./routes/auth";
+import { recommendationsRouter } from "./routes/recommendations";
 import { tagsRouter } from "./routes/tags";
 import { auditRouter } from "./routes/audit";
 import { marketsRouter } from "./routes/markets";
@@ -160,6 +161,7 @@ export function createApp(_options: CreateAppOptions = {}): express.Express {
   );
 
   app.use("/api/auth", authRouter);
+  app.use("/api/recommendations", recommendationsRouter);
   app.use("/api/tags", tagsRouter);
   app.use("/api/audit", auditRouter);
   app.use("/api/markets", marketsRouter);

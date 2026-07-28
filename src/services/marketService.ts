@@ -199,7 +199,26 @@ export async function listUpcomingMarkets(
   }));
 }
 
-export async function getRecommendedMarkets(userId: string): Promise<any[]> {
+export async function getRecommendedMarkets(
+  userId: string,
+  options: { limit?: number; cursor?: string } = {},
+): Promise<Page<any>> {
+  const limit = options.limit ?? 20;
+  const cursorKey = decodeCursor(options.cursor);
+  const cursorTime = cursorKey ? new Date(cursorKey.sortValue) : null;
+  const validCursorTime = cursorTime && !isNaN(cursorTime.getTime()) ? cursorTime : null;
+
+  const cursorCondition =
+    cursorKey && validCursorTime
+      ? or(
+          lt(markets.createdAt, validCursorTime),
+          and(
+            eq(markets.createdAt, validCursorTime),
+            lt(markets.id, cursorKey.id),
+          ),
+        )
+      : undefined;
+
   const userPredictions = await getDb()
     .select({ marketId: predictions.marketId })
     .from(predictions)
@@ -207,7 +226,7 @@ export async function getRecommendedMarkets(userId: string): Promise<any[]> {
 
   const historyIds = userPredictions.map((p: { marketId: string }) => p.marketId);
 
-  let recommendedMarkets: any[] = [];
+  let rows: any[] = [];
 
   if (historyIds.length > 0) {
     const historyMarkets = await getDb()
@@ -221,53 +240,87 @@ export async function getRecommendedMarkets(userId: string): Promise<any[]> {
       .slice(0, 10);
 
     if (keywords.length > 0) {
-      const conditions = keywords.map((k: string) => sql`question ILIKE ${"%" + k + "%"}`);
-      recommendedMarkets = await getDb()
+      const keywordConditions = keywords.map((k: string) => sql`question ILIKE ${"%" + k + "%"}`);
+      const whereConditions = [
+        eq(markets.archived, false),
+        eq(markets.status, "active"),
+        notInArray(markets.id, historyIds),
+        sql`(${sql.join(keywordConditions, sql` OR `)})`,
+      ];
+      if (cursorCondition) {
+        whereConditions.push(cursorCondition);
+      }
+
+      rows = await getDb()
         .select({
           id: markets.id,
           question: markets.question,
           status: markets.status,
           resolutionTime: markets.resolutionTime,
+          createdAt: markets.createdAt,
         })
         .from(markets)
-        .where(
-          and(
-            eq(markets.archived, false),
-            eq(markets.status, "active"),
-            notInArray(markets.id, historyIds),
-            sql`(${sql.join(conditions, sql` OR `)})`
-          )
-        )
-        .orderBy(desc(markets.resolutionTime))
-        .limit(10);
+        .where(and(...whereConditions))
+        .orderBy(desc(markets.createdAt), desc(markets.id))
+        .limit(limit + 1);
     }
   }
 
-  if (recommendedMarkets.length === 0) {
-    recommendedMarkets = await getDb()
+  if (rows.length === 0) {
+    const whereConditions = [
+      eq(markets.archived, false),
+      eq(markets.status, "active"),
+    ];
+    if (historyIds.length > 0) {
+      whereConditions.push(notInArray(markets.id, historyIds));
+    }
+    if (cursorCondition) {
+      whereConditions.push(cursorCondition);
+    }
+
+    rows = await getDb()
       .select({
         id: markets.id,
         question: markets.question,
         status: markets.status,
         resolutionTime: markets.resolutionTime,
+        createdAt: markets.createdAt,
       })
       .from(markets)
-      .where(
-        and(
-          eq(markets.archived, false),
-          eq(markets.status, "active"),
-          historyIds.length > 0 ? notInArray(markets.id, historyIds) : sql`TRUE`
-        )
-      )
-      .orderBy(desc(markets.resolutionTime))
-      .limit(10);
+      .where(and(...whereConditions))
+      .orderBy(desc(markets.createdAt), desc(markets.id))
+      .limit(limit + 1);
   }
 
-  return recommendedMarkets.map((r: any) => ({
-    ...r,
-    resolutionTime: r.resolutionTime instanceof Date ? r.resolutionTime.toISOString() : r.resolutionTime,
-  }));
+  const hasMore = rows.length > limit;
+  const dataRows = rows.slice(0, limit);
+  const lastRow = dataRows[dataRows.length - 1];
+
+  const nextCursor =
+    hasMore && lastRow
+      ? encodeCursor({
+          sortValue:
+            lastRow.createdAt instanceof Date
+              ? lastRow.createdAt.toISOString()
+              : new Date(lastRow.createdAt).toISOString(),
+          id: lastRow.id,
+        })
+      : null;
+
+  return {
+    data: dataRows.map((r: any) => ({
+      id: r.id,
+      question: r.question,
+      status: r.status,
+      resolutionTime:
+        r.resolutionTime instanceof Date ? r.resolutionTime.toISOString() : r.resolutionTime,
+      ...(r.createdAt ? { createdAt: r.createdAt instanceof Date ? r.createdAt.toISOString() : r.createdAt } : {}),
+    })),
+    nextCursor,
+  };
 }
+
+
 
 /**
  * Updates a market with optimistic locking via version field.

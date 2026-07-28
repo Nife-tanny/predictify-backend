@@ -3,6 +3,8 @@ import { getRecommendedMarkets } from "../../services/marketService";
 import { requireAuth } from "../../middleware/requireAuth";
 import { logger } from "../../config/logger";
 import { AuthenticatedRequest } from "../../middleware/auth";
+import { recommendationsQuerySchema } from "../../validators/markets";
+import { conditionalGet } from "../../middleware/etag";
 
 export const recommendationsRouter = Router();
 
@@ -11,16 +13,29 @@ type RequestWithId = AuthenticatedRequest & { id?: string };
 recommendationsRouter.get("/", requireAuth, async (req: AuthenticatedRequest, res, next) => {
   const reqId = String((req as RequestWithId).id ?? "anon");
   try {
-    const userId = req.user!.id;
-    logger.info({ reqId, correlationId: reqId, userId }, "markets_recommendations_requested");
+    const parsedQuery = recommendationsQuerySchema.safeParse(req.query);
+    if (!parsedQuery.success) {
+      throw parsedQuery.error;
+    }
 
-    const recommendations = await getRecommendedMarkets(userId);
+    const { limit, cursor } = parsedQuery.data;
+    const userId = req.user!.id;
+
+    logger.info({ reqId, correlationId: reqId, userId, limit, hasCursor: !!cursor }, "markets_recommendations_requested");
+
+    const page = await getRecommendedMarkets(userId, { limit, cursor });
+
+    if (conditionalGet(page, req, res)) {
+      return;
+    }
 
     return res.status(200).json({
-      data: recommendations,
+      data: page.data,
+      nextCursor: page.nextCursor,
     });
   } catch (err) {
     logger.error({ reqId, correlationId: reqId, err }, "markets_recommendations_failed");
     return next(err);
   }
 });
+

@@ -1,39 +1,3 @@
-import { db } from "../db";
-import { users, predictions } from "../db/schema";
-import { eq, count } from "drizzle-orm";
-
-// ── Types ─────────────────────────────────────────────────────────────────
-
-/** Aggregate totals for the authenticated user's dashboard. */
-export interface ProfileTotals {
-  /** Total number of predictions the user has placed. */
-  totalPredictions: number;
-  /** Total amount staked across all predictions (string for precision). */
-  totalAmountStaked: string;
-  /** Number of predictions that won. */
-  wins: number;
-  /** Number of predictions that lost. */
-  losses: number;
-}
-
-/**
- * Response shape for `GET /api/users/me`.  All timestamps are serialised to
- * ISO-8601 strings so the wire format is stable across runtimes.
- */
-export interface UserProfile {
-  /** Internal UUID (opaque to external consumers). */
-  id: string;
-  /** The user's on-chain Stellar address (G...). */
-  stellarAddress: string;
-  /** Account creation timestamp (ISO-8601). */
-  createdAt: string;
-  /** Ordered newest-first list of predictions. */
-  predictions: PredictionEntry[];
-  /** Aggregate counters for the user's activity on the platform. */
-  totals: ProfileTotals;
-}
-
-/** One entry in the public prediction history. */
 import { db } from "../db/client";
 import { users, predictions, markets } from "../db/schema";
 import { and, eq, desc, lt, or, count } from "drizzle-orm";
@@ -41,6 +5,21 @@ import { Result, ok, err } from "../errors/RouteError";
 import { encodeCursor, decodeCursor, Page, clampLimit, DEFAULT_PAGE_SIZE } from "../utils/cursor";
 
 // ── Types ─────────────────────────────────────────────────────────────────
+
+export interface ProfileTotals {
+  totalPredictions: number;
+  totalAmountStaked: string;
+  wins: number;
+  losses: number;
+}
+
+export interface UserProfile {
+  id: string;
+  stellarAddress: string;
+  createdAt: string;
+  predictions: PredictionEntry[];
+  totals: ProfileTotals;
+}
 
 export interface PredictionEntry {
   id: string;
@@ -55,34 +34,9 @@ export interface PredictionEntry {
   createdAt: string;
 }
 
-// ── Service functions ─────────────────────────────────────────────────────
-
 /**
  * Look up a public user profile by Stellar address.
- *
- * Returns `null` when no user with that address exists.
- *
- * @param stellarAddress - The Stellar account address to look up.
  */
-export async function getUserProfile(
-  stellarAddress: string,
-): Promise<UserProfile | null> {
-  // Stub: always returns null until the DB layer is wired up.
-export interface ProfileTotals {
-  totalPredictions: number;
-  totalAmountStaked: string;
-  wins: number;
-  losses: number;
-}
-
-export interface UserProfile {
-  id: string;
-  stellarAddress: string;
-  joinedAt: string;
-  predictions: PredictionEntry[];
-  totals: ProfileTotals;
-}
-
 export async function getUserProfile(
   stellarAddress: string,
 ): Promise<UserProfile | null> {
@@ -90,17 +44,16 @@ export async function getUserProfile(
   return null;
 }
 
-/**
- * Returns the authenticated user's profile (stellarAddress, createdAt) along
- * with aggregate counts of their predictions.  Two queries run in parallel.
- *
- * Throws if the user row no longer exists (TOCTOU race).
- */
-export async function getCurrentUserProfile(userId: string): Promise<UserProfile> {
 export interface CurrentUserProfile {
+  id?: string;
   stellarAddress: string;
   createdAt: string;
+  predictions?: PredictionEntry[];
   totals: {
+    totalPredictions?: number;
+    totalAmountStaked?: string;
+    wins?: number;
+    losses?: number;
     prediction_count: number;
     claim_count: number;
   };
@@ -142,11 +95,8 @@ export async function getCurrentUserProfile(userId: string): Promise<Result<Curr
 
   const totalPredictions = Number(predCountRow[0]?.value ?? 0);
 
-  return {
-    id: user.id,
-  const prediction_count = Number(predCountRow[0]?.value ?? 0);
-
   return ok({
+    id: user.id,
     stellarAddress: user.stellarAddress,
     createdAt: user.createdAt.toISOString(),
     predictions: [],
@@ -155,7 +105,7 @@ export async function getCurrentUserProfile(userId: string): Promise<Result<Curr
       totalAmountStaked: "0",
       wins: 0,
       losses: 0,
-      prediction_count,
+      prediction_count: totalPredictions,
       claim_count: 0,
     },
   });
@@ -348,3 +298,4 @@ export async function listUsers(opts: {
         : null,
   };
 }
+
