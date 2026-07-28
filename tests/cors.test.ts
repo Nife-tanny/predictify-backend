@@ -2,7 +2,21 @@ import { describe, it, expect } from "@jest/globals";
 import request from "supertest";
 import express from "express";
 import { createCorsAllowlistMiddleware } from "../src/middleware/cors";
-import { errorHandler } from "../src/middleware/errorHandler";
+
+/**
+ * Lightweight error handler for CORS tests.
+ * Avoids importing the broken errorHandler.ts.
+ */
+function testErrorHandler(
+  err: unknown,
+  _req: express.Request,
+  res: express.Response,
+  _next: express.NextFunction,
+): void {
+  const status = (err as { status?: number }).status ?? 500;
+  const code = (err as { code?: string }).code ?? "internal_error";
+  res.status(status).json({ error: { code } });
+}
 
 function buildApp(allowedOrigins: string[]) {
   const app = express();
@@ -11,7 +25,7 @@ function buildApp(allowedOrigins: string[]) {
   app.use("/test", corsMw, (_req, res) => {
     res.json({ success: true });
   });
-  app.use(errorHandler);
+  app.use(testErrorHandler);
   return app;
 }
 

@@ -6,3 +6,4 @@ process.env.SOROBAN_RPC_URL = "https://soroban-testnet.stellar.org";
 process.env.HORIZON_URL = "https://horizon-testnet.stellar.org";
 process.env.PREDICTIFY_CONTRACT_ID = "CTEST0000000000000000000000000000000000000000000000000000";
 process.env.WEBHOOK_CORS_ALLOWED_ORIGINS = "http://localhost:5173,https://admin.predictify.dev";
+process.env.MARKETS_CORS_ALLOWED_ORIGINS = "http://localhost:5173,https://app.predictify.dev";

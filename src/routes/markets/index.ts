@@ -10,6 +10,7 @@ import { searchMarkets } from "../../repositories/marketRepository";
 import { requireAdmin, AuthenticatedRequest } from "../../middleware/auth";
 import { rateLimitAnon } from "../../middleware/rateLimitAnon";
 import { accessLog } from "../../middleware/accessLog";
+import { marketsCors } from "../../middleware/cors";
 import { listFeaturedMarkets } from "../../services/marketFeatureService";
 import { logger } from "../../config/logger";
 import { RouteErrorFactory } from "../../errors";
@@ -33,6 +34,9 @@ import {
 
 export const marketsRouter = Router();
 
+// Enforce CORS allowlist early so unapproved origins are rejected
+// before any processing (preflight responses cached via Access-Control-Max-Age).
+marketsRouter.use(marketsCors());
 marketsRouter.use(accessLog);
 marketsRouter.use(rateLimitAnon);
 marketsRouter.use(requestTimeout(10000));
