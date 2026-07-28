@@ -370,7 +370,15 @@ export const auditLogs = pgTable(
     auditLogsCorrelationIdx: index("audit_logs_correlation_idx").on(
       t.correlationId,
     ),
-    auditLogsCreatedAtIdx: index("audit_logs_created_at_idx").on(t.createdAt),
+    // Composite index for stable cursor pagination: ORDER BY created_at DESC, id DESC.
+    // The (created_at, id) compound key is unique and monotone, so a keyset cursor
+    // over it is stable even when rows with the same timestamp are inserted
+    // concurrently — the id tie-breaker ensures no row is skipped or duplicated
+    // across page boundaries.
+    auditLogsCreatedAtIdIdx: index("audit_logs_created_at_id_idx").on(
+      t.createdAt,
+      t.id,
+    ),
   }),
 );
 
