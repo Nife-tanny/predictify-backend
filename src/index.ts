@@ -24,7 +24,6 @@ import { marketsRouter } from "./routes/markets";
 import { commentsRouter } from "./routes/comments";
 import { usersRouter } from "./routes/users";
 import { predictionsRouter } from "./routes/predictions";
-import { usersRouter } from "./routes/users";
 import { usersHealthRouter } from "./routes/users/health";
 import { userPortfolioRouter } from "./routes/users/portfolio";
 import { userStatsRouter } from "./routes/users/stats";
@@ -34,7 +33,6 @@ import { adminFeatureFlagsRouter } from "./routes/admin/featureFlags";
 import { adminUsersRouter } from "./routes/adminUsers";
 import { adminNotesRouter } from "./routes/admin/users/notes";
 import { leaderboardRouter } from "./routes/leaderboard";
-import { predictionsRouter } from "./routes/predictions";
 import { globalLeaderboardRouter } from "./routes/leaderboard/global";
 import { createDocsRouter } from "./routes/docs";
 import { searchRouter } from "./routes/search";
@@ -54,7 +52,7 @@ import { REQUEST_ID_HEADER } from "./lib/http";
 import { register } from "./metrics/registry";
 import { connectWithRetry, closeDb, db } from "./db/client";
 import { stopScheduler } from "./services/scheduler";
-import { startIndexerHealthProbe, stopIndexerHealthProbe } from "./jobs/indexerHealthProbe";
+import { startIndexerHealthProbe } from "./jobs/indexerHealthProbe";
 import { indexerHealthRouter } from "./routes/indexer/health";
 import { WebhookWorker } from "./workers/webhookWorker";
 import { marketResolverWorker } from "./workers/marketResolver";
@@ -63,9 +61,8 @@ import { reconciliationWorker } from "./workers/reconciliationWorker";
 import { rateLimitRouter } from "./routes/rate-limit";
 import { adminRateLimitInspectRouter } from "./routes/admin/rate-limit/inspect";
 import { quotaRequestsRouter } from "./routes/quota/requests";
-import { startSlowQueryAlerter, stopSlowQueryAlerter } from "./workers/slowQueryAlerter";
-import { invitesRouter } from "./routes/invites";
-import { gracefulShutdown } from "./lifecycle/shutdown";
+import { startSlowQueryAlerter } from "./workers/slowQueryAlerter";
+import { reportsRouter } from "./routes/reports";
 
 const docsEnabled = env.NODE_ENV !== "production" || process.env.ENABLE_DOCS === "true";
 
@@ -165,6 +162,7 @@ export function createApp(_options: CreateAppOptions = {}): express.Express {
   app.use("/api/audit", auditRouter);
   app.use("/api/markets", marketsRouter);
   app.use("/api/markets", commentsRouter);
+  app.use("/api/comments", commentsRouter);
   app.use("/api/predictions", predictionsRouter);
   app.use("/api/leaderboard", leaderboardRouter);
   app.use("/api/leaderboard/global", globalLeaderboardRouter);
@@ -214,3 +212,58 @@ export function createApp(_options: CreateAppOptions = {}): express.Express {
   return app;
 }
 
+if (require.main === module) {
+  const app = createApp();
+  let webhookWorker: WebhookWorker | null = null;
+
+  connectWithRetry()
+    .then(() => {
+      webhookWorker = new WebhookWorker(db);
+      webhookWorker.start();
+      marketResolverWorker.start();
+      backupVerificationWorker.start();
+      reconciliationWorker.start();
+      startSlowQueryAlerter();
+      startIndexerHealthProbe();
+
+      app.listen(env.PORT, () => {
+        logger.info({ port: env.PORT, env: env.NODE_ENV }, "predictify-backend listening");
+        if (env.ENABLE_DOCS) {
+          logger.info(`Swagger UI available at http://localhost:${env.PORT}/docs`);
+        }
+        logger.info(`Swagger UI available at http://localhost:${env.PORT}/docs`);
+      });
+
+      process.on("SIGTERM", async () => {
+        logger.info("SIGTERM received, shutting down");
+        const forceExit = setTimeout(() => {
+          logger.warn("Forced exit after shutdown timeout");
+          process.exit(1);
+        }, 5000).unref();
+
+        // Workers handled by gracefulShutdown
+        stopScheduler();
+        await closeDb();
+        clearTimeout(forceExit);
+        process.exit(0);
+      });
+
+      process.on("SIGINT", async () => {
+        logger.info("SIGINT received, shutting down gracefully");
+        const forceExit = setTimeout(() => {
+          logger.warn("Forced exit after shutdown timeout");
+          process.exit(1);
+        }, 5000).unref();
+
+        // Workers handled by gracefulShutdown
+        stopScheduler();
+        await closeDb();
+        clearTimeout(forceExit);
+        process.exit(0);
+      });
+    })
+    .catch((err) => {
+      logger.fatal({ err }, "Failed to start server");
+      process.exit(1);
+    });
+}
