@@ -64,6 +64,7 @@ import { quotaRequestsRouter } from "./routes/quota/requests";
 import { startSlowQueryAlerter, stopSlowQueryAlerter } from "./workers/slowQueryAlerter";
 import { reportsRouter } from "./routes/reports";
 import { fingerprintRouter } from "./routes/fingerprint";
+import { alertsRouter } from "./routes/alerts";
 import { gracefulShutdown } from "./lifecycle/shutdown";
 
 const docsEnabled = env.NODE_ENV !== "production" || process.env.ENABLE_DOCS === "true";
@@ -191,6 +192,7 @@ export function createApp(_options: CreateAppOptions = {}): express.Express {
   app.use("/api/admin/rate-limit", adminRateLimitInspectRouter);
   app.use("/api/reports", reportsRouter);
   app.use("/api/fingerprint", fingerprintRouter);
+  app.use("/api/alerts", alertsRouter);
 
 
   app.get("/metrics", async (req, res) => {
