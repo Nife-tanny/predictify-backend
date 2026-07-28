@@ -28,6 +28,7 @@ import { usersHealthRouter } from "./routes/users/health";
 import { userPortfolioRouter } from "./routes/users/portfolio";
 import { userStatsRouter } from "./routes/users/stats";
 import { devicesRouter } from "./routes/devices";
+import { devicesRevokeRouter } from "./routes/devicesRevoke";
 import { featureFlagsRouter } from "./routes/feature-flags";
 import { adminFeatureFlagsRouter } from "./routes/admin/featureFlags";
 import { featureFlagsRouter } from "./routes/feature-flags";
@@ -186,6 +187,7 @@ export function createApp(_options: CreateAppOptions = {}): express.Express {
   app.use("/api/users", usersRouter);
   app.use("/api/predictions", predictionsRouter);
   app.use("/api/me/devices", devicesRouter);
+  app.use("/api/me/devices/:id/revoke", devicesRevokeRouter);
   app.use("/api/me/sessions", sessionsRouter);
   app.use("/api/webhooks", webhooksRouter);
   app.use("/api/admin/audit", adminAuditRouter);

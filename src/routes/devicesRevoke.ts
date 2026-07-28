@@ -7,11 +7,15 @@ import { requireAuth } from "../middleware/requireAuth";
 import { AuthenticatedRequest } from "../middleware/auth";
 import { logger } from "../config/logger";
 import { RouteErrorFactory } from "../errors";
+import { securityHeaders } from "../middleware/securityHeaders";
 
 const paramsSchema = z.object({ id: z.string().uuid({ message: "invalid device id" }) });
 
 export const devicesRevokeRouter = Router({ mergeParams: true });
 
+// Apply security headers first — ensures CSP, X-Content-Type-Options, and
+// Referrer-Policy are present on every response including 401/403s.
+devicesRevokeRouter.use(securityHeaders);
 devicesRevokeRouter.use(requireAuth);
 
 devicesRevokeRouter.post(
