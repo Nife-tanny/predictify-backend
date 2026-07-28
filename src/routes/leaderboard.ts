@@ -2,6 +2,7 @@ import { Router } from "express";
 import { z } from "zod";
 import { getLeaderboard, getLeaderboardWithRefresh, getUserLeaderboardEntry } from "../services/leaderboardService";
 import { rateLimitAnon } from "../middleware/rateLimitAnon";
+import { conditionalGet } from "../middleware/etag";
 import { RouteErrorFactory } from "../errors";
 import { abortableRace, requestTimeout, RequestAbortedError } from "../middleware/timeout";
 import { logger } from "../config/logger";
@@ -50,7 +51,7 @@ leaderboardRouter.get("/", async (req, res, next) => {
       : getLeaderboard(limit, offset, period);
     const data = await abortableRace(fetch, signal);
 
-    res.json({
+    const payload = {
       data,
       meta: {
         limit,
@@ -59,7 +60,11 @@ leaderboardRouter.get("/", async (req, res, next) => {
         refresh,
         period,
       }
-    });
+    };
+
+    // Strong ETag on the leaderboard payload; 304 if client already has it.
+    if (conditionalGet(payload, req, res)) return;
+    res.json(payload);
   } catch (e) {
     if (e instanceof RequestAbortedError) {
       // The timeout middleware already sent (or the client already dropped)
@@ -85,7 +90,11 @@ leaderboardRouter.get("/user/:stellarAddress", async (req, res, next) => {
     if (!entry) {
       throw RouteErrorFactory.notFound("Leaderboard entry not found");
     }
-    res.json({ data: entry });
+
+    // Strong ETag on the entry payload; 304 if client already has it.
+    const payload = { data: entry };
+    if (conditionalGet(payload, req, res)) return;
+    res.json(payload);
   } catch (e) {
     if (e instanceof RequestAbortedError) {
       logger.warn(
