@@ -39,6 +39,7 @@ import { createDocsRouter } from "./routes/docs";
 import { searchRouter } from "./routes/search";
 
 import { sessionsRouter } from "./routes/me/sessions";
+import { referralsRouter } from "./routes/referrals";
 import { notificationsRouter } from "./routes/notifications";
 import { socialRouter } from "./routes/social";
 import { webhooksHealthRouter } from "./routes/webhooks/health";
@@ -202,6 +203,7 @@ export function createApp(_options: CreateAppOptions = {}): express.Express {
   app.use("/api/reports", reportsRouter);
   app.use("/api/fingerprint", fingerprintRouter);
   app.use("/api/alerts", alertsRouter);
+  app.use("/api/referrals", referralsRouter);
 
 
   app.get("/metrics", async (req, res) => {
