@@ -242,33 +242,34 @@ if (require.main === module) {
         logger.info(`Swagger UI available at http://localhost:${env.PORT}/docs`);
       });
 
-      process.on("SIGTERM", async () => {
-        logger.info("SIGTERM received, shutting down");
+      const handleShutdown = async (signal: string) => {
+        logger.info({ signal }, "shutdown_signal_received");
+        setAuthDraining(true);
+
         const forceExit = setTimeout(() => {
           logger.warn("Forced exit after shutdown timeout");
           process.exit(1);
-        }, 5000).unref();
+        }, 10000).unref();
 
-        // Workers handled by gracefulShutdown
-        stopScheduler();
-        await closeDb();
-        clearTimeout(forceExit);
-        process.exit(0);
-      });
+        try {
+          logger.info("Draining in-flight /api/auth requests...");
+          await waitForAuthDrain(5000);
+          logger.info("In-flight /api/auth requests drained successfully");
 
-      process.on("SIGINT", async () => {
-        logger.info("SIGINT received, shutting down gracefully");
-        const forceExit = setTimeout(() => {
-          logger.warn("Forced exit after shutdown timeout");
+          stopScheduler();
+          await closeDb();
+          clearTimeout(forceExit);
+          logger.info("Shutdown completed successfully");
+          process.exit(0);
+        } catch (err) {
+          logger.error({ err }, "Error during shutdown");
+          clearTimeout(forceExit);
           process.exit(1);
-        }, 5000).unref();
+        }
+      };
 
-        // Workers handled by gracefulShutdown
-        stopScheduler();
-        await closeDb();
-        clearTimeout(forceExit);
-        process.exit(0);
-      });
+      process.on("SIGTERM", () => handleShutdown("SIGTERM"));
+      process.on("SIGINT", () => handleShutdown("SIGINT"));
     })
     .catch((err) => {
       logger.fatal({ err }, "Failed to start server");
