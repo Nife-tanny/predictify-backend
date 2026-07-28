@@ -30,7 +30,6 @@ import {
   createAuditLog,
   type RateLimitContext,
 } from "../services/auditService";
-import { logger } from "../config/logger";
 import { env } from "../config/env";
 
 declare global {

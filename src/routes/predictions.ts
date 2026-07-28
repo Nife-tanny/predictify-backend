@@ -142,6 +142,7 @@ predictionsRouter.post("/claim", async (req, res, next) => {
   }
 });
 
+/**
  * GET /api/predictions
  *
  * Returns a cursor-paginated list of predictions belonging to the authenticated

@@ -22,7 +22,6 @@ import { marketsRouter } from "./routes/markets";
 import { commentsRouter } from "./routes/comments";
 import { usersRouter } from "./routes/users";
 import { predictionsRouter } from "./routes/predictions";
-import { usersRouter } from "./routes/users";
 import { usersHealthRouter } from "./routes/users/health";
 import { userPortfolioRouter } from "./routes/users/portfolio";
 import { userStatsRouter } from "./routes/users/stats";
@@ -31,7 +30,6 @@ import { adminFeatureFlagsRouter } from "./routes/admin/featureFlags";
 import { adminUsersRouter } from "./routes/adminUsers";
 import { adminNotesRouter } from "./routes/admin/users/notes";
 import { leaderboardRouter } from "./routes/leaderboard";
-import { predictionsRouter } from "./routes/predictions";
 import { globalLeaderboardRouter } from "./routes/leaderboard/global";
 import { createDocsRouter } from "./routes/docs";
 
@@ -50,7 +48,7 @@ import { REQUEST_ID_HEADER } from "./lib/http";
 import { register } from "./metrics/registry";
 import { connectWithRetry, closeDb, db } from "./db/client";
 import { stopScheduler } from "./services/scheduler";
-import { startIndexerHealthProbe, stopIndexerHealthProbe } from "./jobs/indexerHealthProbe";
+import { startIndexerHealthProbe } from "./jobs/indexerHealthProbe";
 import { indexerHealthRouter } from "./routes/indexer/health";
 import { WebhookWorker } from "./workers/webhookWorker";
 import { marketResolverWorker } from "./workers/marketResolver";
@@ -59,9 +57,8 @@ import { reconciliationWorker } from "./workers/reconciliationWorker";
 import { rateLimitRouter } from "./routes/rate-limit";
 import { adminRateLimitInspectRouter } from "./routes/admin/rate-limit/inspect";
 import { quotaRequestsRouter } from "./routes/quota/requests";
-import { startSlowQueryAlerter, stopSlowQueryAlerter } from "./workers/slowQueryAlerter";
+import { startSlowQueryAlerter } from "./workers/slowQueryAlerter";
 import { reportsRouter } from "./routes/reports";
-import { gracefulShutdown } from "./lifecycle/shutdown";
 
 const docsEnabled = env.NODE_ENV !== "production" || process.env.ENABLE_DOCS === "true";
 
@@ -154,6 +151,7 @@ export function createApp(_options: CreateAppOptions = {}): express.Express {
   app.use("/api/audit", auditRouter);
   app.use("/api/markets", marketsRouter);
   app.use("/api/markets", commentsRouter);
+  app.use("/api/comments", commentsRouter);
   app.use("/api/predictions", predictionsRouter);
   app.use("/api/leaderboard", leaderboardRouter);
   app.use("/api/leaderboard/global", globalLeaderboardRouter);
@@ -204,8 +202,6 @@ export function createApp(_options: CreateAppOptions = {}): express.Express {
 if (require.main === module) {
   const app = createApp();
   let webhookWorker: WebhookWorker | null = null;
-  let probeHandle: ReturnType<typeof setInterval> | null = null;
-
 
   connectWithRetry()
     .then(() => {
@@ -215,7 +211,7 @@ if (require.main === module) {
       backupVerificationWorker.start();
       reconciliationWorker.start();
       startSlowQueryAlerter();
-      probeHandle = startIndexerHealthProbe();
+      startIndexerHealthProbe();
 
       app.listen(env.PORT, () => {
         logger.info({ port: env.PORT, env: env.NODE_ENV }, "predictify-backend listening");
