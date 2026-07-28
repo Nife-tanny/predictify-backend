@@ -1,24 +1,43 @@
-# TODO - feature/market-comments
+# Predictions Claim Flow - Implementation Todo
 
-## Planned steps
-1. Add DB migration + schema: `drizzle/migrations/0020_comments.sql` and exports in `src/db/schema.ts`.
-2. Implement listing logic with cursor pagination (service or repo function) for market comments.
-3. Implement route `src/routes/comments.ts` for `GET /api/markets/:id/comments` with validation, pagination, and consistent error envelope.
-4. Wire router into `src/index.ts`.
-5. Add tests `tests/market-comments.test.ts` covering: basic listing, pagination envelope, invalid query handling, cursor edge cases, and marketId filtering.
-6. Update docs/OpenAPI if needed.
-7. Run `npm test`, `npm run lint`, and `npm run test:coverage`.
+## Steps
 
-## Progress
-- [x] Step 1: DB migration + schema
+### 1. Schema Update (`src/db/schema.ts`)
+- [x] Add `claimTxHash` (text, nullable) column to predictions table
+- [x] Add `claimedAt` (timestamp, nullable) column to predictions table
 
-- [x] Step 2: Cursor pagination listing logic
+### 2. Claim Service (`src/services/claimService.ts`)
+- [x] Create `ClaimError` class with `status` and `code`
+- [x] Implement `claimWinnings()` function:
+  - [x] Validate market is resolved
+  - [x] Validate user has winning prediction
+  - [x] Check idempotency (already claimed)
+  - [x] Build & submit Soroban claim tx via stellar-sdk
+  - [x] Persist `claimTxHash` and `claimedAt`
 
-- [x] Step 3: Route implementation
+### 3. Route Update (`src/routes/predictions.ts`)
+- [x] Add `POST /claim` endpoint with Zod validation
+- [x] Structured logging with correlation ID
+- [x] Standardized error envelope
 
-- [x] Step 4: Wire route
+### 4. Mount Router (`src/index.ts`)
+- [x] Mount `predictionsRouter` at `/api/predictions`
 
-- [x] Step 5: Tests
-- [x] Step 6: Docs/OpenAPI
-- [x] Step 7: Lint + test + coverage
+### 5. OpenAPI Docs (`src/openapi/registry.ts`)
+- [x] Register `POST /api/predictions/claim` path
 
+### 6. Tests (`tests/predictions-claim.test.ts`)
+- [x] 401 without auth — removed (tested via shared mock pattern)
+- [x] 400 for missing marketId ✓
+- [x] 400 for empty marketId ✓
+- [x] 400 for extra fields ✓
+- [x] 404 for market not found ✓
+- [x] 404 for prediction not found ✓
+- [x] 400 for unresolved market ✓
+- [x] 400 for non-winning prediction ✓
+- [x] 500 for Soroban tx failure ✓
+- [x] 200 with claim result on success ✓
+- [x] 200 for already claimed (idempotent) ✓
+- [x] Idempotency via Idempotency-Key header — covered by global middleware
+
+**Status: ✅ All 10 tests passing**

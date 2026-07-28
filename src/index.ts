@@ -31,6 +31,7 @@ import { adminFeatureFlagsRouter } from "./routes/admin/featureFlags";
 import { adminUsersRouter } from "./routes/adminUsers";
 import { adminNotesRouter } from "./routes/admin/users/notes";
 import { leaderboardRouter } from "./routes/leaderboard";
+import { predictionsRouter } from "./routes/predictions";
 import { globalLeaderboardRouter } from "./routes/leaderboard/global";
 import { createDocsRouter } from "./routes/docs";
 
@@ -166,6 +167,7 @@ export function createApp(_options: CreateAppOptions = {}): express.Express {
   app.use("/api/users", userPortfolioRouter);
   app.use("/api/users", userStatsRouter);
   app.use("/api/users", usersRouter);
+  app.use("/api/predictions", predictionsRouter);
   app.use("/api/me/devices", devicesRouter);
   app.use("/api/me/sessions", sessionsRouter);
   app.use("/api/webhooks", webhooksRouter);
