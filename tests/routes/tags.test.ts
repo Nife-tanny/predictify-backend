@@ -26,7 +26,6 @@ describe("Tags API", () => {
   });
 
   afterAll(async () => {
-    // Clean up auth pool to avoid hanging tests
     await closeAuthPool();
   });
 
@@ -53,5 +52,22 @@ describe("Tags API", () => {
     const res = await request(app).get("/api/tags?limit=200");
     expect(res.status).toBe(400);
     expect(res.body).toHaveProperty("error.code", "validation_error");
+  });
+
+  it("should return X-Correlation-Id header from accessLog middleware", async () => {
+    const res = await request(app)
+      .get("/api/tags")
+      .set("X-Correlation-Id", "test-corr-123");
+    expect(res.status).toBe(200);
+    expect(res.headers["x-correlation-id"]).toBe("test-corr-123");
+  });
+
+  it("should generate a correlation ID when none is supplied", async () => {
+    const res = await request(app).get("/api/tags");
+    expect(res.status).toBe(200);
+    expect(res.headers["x-correlation-id"]).toBeDefined();
+    expect(res.headers["x-correlation-id"]).toMatch(
+      /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
+    );
   });
 });

@@ -1,9 +1,8 @@
-import { Router, Request, Response, NextFunction } from "express";
-import { z } from "zod";
-import { getMarketTags } from "../repositories/marketRepository";
-import { logger } from "../config/logger";
+import { Router } from "express";
+import { accessLog } from "../middleware/accessLog";
 
 export const tagsRouter = Router();
+tagsRouter.use(accessLog);
 
 const tagsQuerySchema = z.object({
   limit: z.coerce.number().int().min(1).max(100).default(10),
