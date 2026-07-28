@@ -25,6 +25,7 @@ import { predictionsRouter } from "./routes/predictions";
 import { usersRouter } from "./routes/users";
 import { usersHealthRouter } from "./routes/users/health";
 import { userPortfolioRouter } from "./routes/users/portfolio";
+import { userStatsRouter } from "./routes/users/stats";
 import { devicesRouter } from "./routes/devices";
 import { adminFeatureFlagsRouter } from "./routes/admin/featureFlags";
 import { adminUsersRouter } from "./routes/adminUsers";
@@ -163,6 +164,7 @@ export function createApp(_options: CreateAppOptions = {}): express.Express {
   app.use("/api/users/health", usersHealthRouter);
   app.use("/api/users", socialRouter);
   app.use("/api/users", userPortfolioRouter);
+  app.use("/api/users", userStatsRouter);
   app.use("/api/users", usersRouter);
   app.use("/api/me/devices", devicesRouter);
   app.use("/api/me/sessions", sessionsRouter);
