@@ -10,6 +10,11 @@
  * Rate-limit keying is based on the authenticated stellar address populated by
  * `requireAuth`, so quota is tracked independently per user, not per IP.
  *
+ * All routes are wrapped by `accessLog` which:
+ *   - Resolves a correlation ID via the priority chain (header → req.id → UUID)
+ *   - Echoes it back in the `X-Correlation-Id` response header
+ *   - Emits a structured `webhooks_access_log` entry on every response finish.
+ *
  * Endpoints:
  *   GET    /          — list webhook subscriptions
  *   POST   /          — create a new webhook subscription
@@ -24,6 +29,7 @@
 import { Router } from "express";
 import { logger } from "../config/logger";
 import { getRequestId } from "../lib/requestContext";
+import { accessLog } from "../middleware/accessLog";
 import { webhookCors } from "../middleware/cors";
 import { requireAdmin } from "../middleware/requireAdmin";
 import { webhooksRateLimiter } from "../middleware/rateLimit";
@@ -37,6 +43,11 @@ import { webhooksRateLimiter } from "../middleware/rateLimit";
 // ---------------------------------------------------------------------------
 
 export const webhooksRouter = Router();
+
+// Structured access log — resolves correlation ID, echoes it back, and
+// emits a webhooks_access_log entry on every response finish.
+// Mounted first so the correlation ID is available to all downstream handlers.
+webhooksRouter.use(accessLog);
 
 // Enforce CORS allowlist before admin auth so unapproved origins are
 // rejected early without leaking auth challenge details.
