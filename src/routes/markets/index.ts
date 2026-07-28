@@ -15,8 +15,6 @@ import { accessLog } from "../../middleware/accessLog";
 import { marketsCors } from "../../middleware/cors";
 import { listFeaturedMarkets } from "../../services/marketFeatureService";
 import { logger } from "../../config/logger";
-import type { Request, Response, NextFunction } from "express";
-const trackMarketsMetrics = (_name: string) => (_req: Request, _res: Response, next: NextFunction) => next();
 import { RouteErrorFactory } from "../../errors";
 import { conditionalGet } from "../../middleware/etag";
 import { recommendationsRouter } from "./recommendations";
@@ -36,10 +34,6 @@ import {
   patchMarketBodySchema,
   createMarketBodySchema,
 } from "../../validators/markets";
-
-function trackMarketsMetrics(_action: string) {
-  return (_req: any, _res: any, next: any) => next();
-}
 
 export const marketsRouter = Router();
 

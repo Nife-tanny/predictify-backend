@@ -1,5 +1,9 @@
 import { Router } from "express";
+import type { Request, Response, NextFunction } from "express";
+import { z } from "zod";
 import { accessLog } from "../middleware/accessLog";
+import { logger } from "../config/logger";
+import { getMarketTags } from "../repositories/marketRepository";
 
 export const tagsRouter = Router();
 tagsRouter.use(accessLog);
@@ -45,7 +49,7 @@ const tagsQuerySchema = z.object({
  *               $ref: '#/components/schemas/ErrorResponse'
  */
 tagsRouter.get("/", async (req: Request, res: Response, next: NextFunction) => {
-  const reqId = String((req as any).id ?? "anon");
+  const reqId = String((req as Request & { id?: unknown }).id ?? "anon");
   try {
     const parsed = tagsQuerySchema.safeParse(req.query);
     if (!parsed.success) {
