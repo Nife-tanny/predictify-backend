@@ -60,7 +60,7 @@ import { rateLimitRouter } from "./routes/rate-limit";
 import { adminRateLimitInspectRouter } from "./routes/admin/rate-limit/inspect";
 import { quotaRequestsRouter } from "./routes/quota/requests";
 import { startSlowQueryAlerter, stopSlowQueryAlerter } from "./workers/slowQueryAlerter";
-import { reportsRouter } from "./routes/reports";
+import { invitesRouter } from "./routes/invites";
 import { gracefulShutdown } from "./lifecycle/shutdown";
 
 const docsEnabled = env.NODE_ENV !== "production" || process.env.ENABLE_DOCS === "true";
@@ -181,6 +181,7 @@ export function createApp(_options: CreateAppOptions = {}): express.Express {
   app.use("/api/admin/schema-versions", adminSchemaVersionsRouter);
   app.use("/api/admin/rate-limit", adminRateLimitInspectRouter);
   app.use("/api/reports", reportsRouter);
+  app.use("/api/invites", invitesRouter);
 
 
   app.get("/metrics", async (req, res) => {

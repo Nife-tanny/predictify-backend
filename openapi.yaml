@@ -4233,13 +4233,90 @@ paths:
                     type: string
                     nullable: true
                     format: uuid
+required:
+                      - error
+                      - replayDeliveryId
+                  examples:
+                    alreadyReplayed:
+                      summary: This DLQ row was already replayed — idempotency guard triggered
+                      value:
+                        error:
+                          type: already_replayed
+                        replayDeliveryId: ffff4444-dddd-4000-8000-000000000005
+
+  /api/invites:
+    post:
+      operationId: createInvite
+      tags:
+        - Invites
+      summary: Create a new invite
+      description: >
+        Creates an invite for the authenticated user. Rate-limited per user
+        with a token-bucket algorithm (60 tokens per 60 s window by default).
+      security:
+        - bearerAuth: []
+      responses:
+        '201':
+          description: Invite created
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: object
+                    properties:
+                      message:
+                        type: string
+                    required:
+                      - message
                 required:
-                  - error
-                  - replayDeliveryId
-              examples:
-                alreadyReplayed:
-                  summary: This DLQ row was already replayed — idempotency guard triggered
-                  value:
-                    error:
-                      type: already_replayed
-                    replayDeliveryId: ffff4444-dddd-4000-8000-000000000005
+                  - data
+        '401':
+          description: Missing or invalid JWT
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '429':
+          description: Rate limit exceeded
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+    get:
+      operationId: listInvites
+      tags:
+        - Invites
+      summary: List invites for the authenticated user
+      description: >
+        Lists invites for the authenticated user. Subject to the same per-user
+        token-bucket rate limit as POST /api/invites.
+      security:
+        - bearerAuth: []
+      responses:
+        '200':
+          description: List of invites
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items:
+                      type: object
+                required:
+                  - data
+        '401':
+          description: Missing or invalid JWT
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '429':
+          description: Rate limit exceeded
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
