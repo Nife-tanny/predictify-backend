@@ -390,6 +390,8 @@ export const auditLogs = pgTable(
     walletAddress: text("wallet_address"),
     ip: text("ip").notNull(),
     correlationId: text("correlation_id").notNull(),
+    beforeState: jsonb("before_state"),
+    afterState: jsonb("after_state"),
     rateLimitContext: jsonb("rate_limit_context"),
     createdAt: timestamp("created_at", { withTimezone: true })
       .notNull()
