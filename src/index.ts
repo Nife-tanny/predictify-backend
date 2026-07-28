@@ -28,6 +28,7 @@ import { userPortfolioRouter } from "./routes/users/portfolio";
 import { userStatsRouter } from "./routes/users/stats";
 import { devicesRouter } from "./routes/devices";
 import { adminFeatureFlagsRouter } from "./routes/admin/featureFlags";
+import { featureFlagsRouter } from "./routes/feature-flags";
 import { adminUsersRouter } from "./routes/adminUsers";
 import { adminNotesRouter } from "./routes/admin/users/notes";
 import { leaderboardRouter } from "./routes/leaderboard";
@@ -177,6 +178,7 @@ export function createApp(_options: CreateAppOptions = {}): express.Express {
   app.use("/api/admin/users", adminUsersRouter);
   app.use("/api/admin/users", adminNotesRouter);
   app.use("/api/admin/feature-flags", adminFeatureFlagsRouter);
+  app.use("/api/feature-flags", featureFlagsRouter);
   app.use("/api/admin/markets", adminMarketsRouter);
   app.use("/api/admin/schema-versions", adminSchemaVersionsRouter);
   app.use("/api/admin/rate-limit", adminRateLimitInspectRouter);
