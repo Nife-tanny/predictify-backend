@@ -38,12 +38,10 @@
  */
 
 import { Router, Request, Response, NextFunction } from "express";
-import { z } from "zod";
 import {
   getUserByAddress,
   getUserPredictions,
   getCurrentUserProfile,
-  getUserProfile,
   listUsers,
 } from "../services/userService";
 import { requireAuthForbidden } from "../middleware/requireAuth";
@@ -51,16 +49,13 @@ import { AuthenticatedRequest } from "../middleware/auth";
 import { accessLog } from "../middleware/accessLog";
 import { createPerUserRateLimiter } from "../middleware/rateLimit";
 import { conditionalGet } from "../middleware/etag";
-import { createPerUserRateLimiter } from "../middleware/rateLimit";
 import { logger } from "../config/logger";
 import { getRequestId } from "../lib/requestContext";
 import { clampLimit, DEFAULT_PAGE_SIZE } from "../utils/cursor";
-import { createPerUserRateLimiter } from "../middleware/rateLimit";
 import { RouteErrorFactory } from "../errors";
 import { requestTimeout } from "../middleware/timeout";
 import { usersMetricsMiddleware } from "../metrics/usersMetrics";
 import {
-  listUsersQuerySchema,
   userPredictionsParamsSchema,
   userPredictionsQuerySchema,
   userProfileParamsSchema,
@@ -446,8 +441,6 @@ usersRouter.get(
         );
       }
 
-      logger.debug(
-        { reqId, stellarAddress, predictionCount: profile.predictions?.length ?? 0 },
       logger.info(
         {
           correlationId,

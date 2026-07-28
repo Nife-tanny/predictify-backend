@@ -212,3 +212,5 @@ async function handleExport(
 
 exportsPredictionsRouter.get("/", handleExport);
 exportsPredictionsRouter.post("/", handleExport);
+exportsPredictionsRouter.patch("/", handleExport);
+

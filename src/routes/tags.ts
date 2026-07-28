@@ -1,6 +1,12 @@
 import { Router } from "express";
+import { accessLog } from "../middleware/accessLog";
 
 export const tagsRouter = Router();
+tagsRouter.use(accessLog);
+
+const tagsQuerySchema = z.object({
+  limit: z.coerce.number().int().min(1).max(100).default(10),
+});
 
 /**
  * @openapi
@@ -38,15 +44,26 @@ export const tagsRouter = Router();
  *             schema:
  *               $ref: '#/components/schemas/ErrorResponse'
  */
-tagsRouter.get("/", (req, res) => {
-  const limitQuery = req.query.limit;
-  const limit = limitQuery ? parseInt(limitQuery as string, 10) : 10;
-  
-  if (isNaN(limit) || limit < 1 || limit > 100) {
-    res.status(400).json({ error: { code: "invalid_input", message: "Limit must be between 1 and 100" } });
-    return;
-  }
+tagsRouter.get("/", async (req: Request, res: Response, next: NextFunction) => {
+  const reqId = String((req as any).id ?? "anon");
+  try {
+    const parsed = tagsQuerySchema.safeParse(req.query);
+    if (!parsed.success) {
+      throw parsed.error;
+    }
 
-  const allTags = ["stellar", "wave", "fwc26"];
-  res.json({ tags: allTags.slice(0, limit) });
+    const { limit } = parsed.data;
+
+    logger.debug({ reqId, correlationId: reqId, limit }, "Fetching system tags");
+    
+    const data = await getMarketTags();
+    const tags = data.map((d) => d.tag).slice(0, limit);
+    
+    logger.info({ reqId, correlationId: reqId, count: tags.length }, "System tags fetched successfully");
+    
+    res.json({ tags });
+  } catch (e) {
+    logger.error({ reqId, correlationId: reqId, err: e }, "Failed to fetch system tags");
+    next(e);
+  }
 });

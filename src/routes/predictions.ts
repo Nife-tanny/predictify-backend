@@ -18,6 +18,7 @@ import { createPerUserRateLimiter } from "../middleware/rateLimit";
 import { getPredictionExplanation } from "../services/predictionExplainService";
 import cancelRouter from "./predictions/cancel";
 import { createShareRouter } from "./predictions/share";
+import { predictionsHealthRouter } from "./predictions/health";
 import { listPredictions } from "../repositories/predictionRepo";
 import { logger } from "../config/logger";
 import { getRequestId } from "../lib/requestContext";
@@ -48,6 +49,7 @@ predictionsRouter.use(requestTimeout(15000));
  */
 predictionsRouter.use("/", createShareRouter());
 predictionsRouter.use("/", cancelRouter);
+predictionsRouter.use("/", predictionsHealthRouter);
 
 // ── Authenticated routes ──────────────────────────────────────────────────
 predictionsRouter.use(requireAuth);
@@ -142,6 +144,7 @@ predictionsRouter.post("/claim", async (req, res, next) => {
   }
 });
 
+/**
  * GET /api/predictions
  *
  * Returns a cursor-paginated list of predictions belonging to the authenticated

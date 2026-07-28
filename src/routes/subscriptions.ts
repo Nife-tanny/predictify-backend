@@ -9,6 +9,10 @@ import { createAuditLog } from "../services/auditService";
 
 export const subscriptionsRouter = Router();
 
+// Mounted first so CSP / X-Content-Type-Options / Referrer-Policy are set
+// on every response from this router, including the 403 that requireAdmin
+// returns for unauthenticated/unauthorized callers.
+subscriptionsRouter.use(securityHeaders);
 subscriptionsRouter.use(requireAdmin);
 
 subscriptionsRouter.get("/", async (req, res, next) => {
