@@ -14,14 +14,21 @@ The strategy is:
 ## Configuration
 - `FLAGS_CACHE_TTL_SECONDS`: Polling interval in seconds (default: 30)
 
+## API Endpoints (Public)
+
+- `GET /api/feature-flags` — List active feature flags.
+  - Query: `cursor` (optional), `limit` (optional, default 20, max 100)
+  - Response: `{ items: Array<{ id, enabled, variant }>, next_cursor: string | null, total: number }`
+  - `next_cursor` is `null` on the last page. Pass it verbatim as `?cursor=` to fetch the next page.
+
 ## API Endpoints (Admin Only)
 
 All endpoints require the `Authorization` header with a valid admin JWT. The endpoints are rate-limited per admin token.
 
-- `GET /api/admin/flags` - List all flags.
-- `GET /api/admin/flags/:key` - Get a single flag. Returns 404 if not found.
-- `POST /api/admin/flags` - Create a new flag.
+- `GET /api/admin/feature-flags` - List all flags.
+- `GET /api/admin/feature-flags/:key` - Get a single flag. Returns 404 if not found.
+- `POST /api/admin/feature-flags` - Create a new flag.
   - Body: `{ key: string, enabled: boolean, variant?: string, description?: string }`
-- `PATCH /api/admin/flags/:key` - Partially update a flag.
+- `PATCH /api/admin/feature-flags/:key` - Partially update a flag.
   - Body: `{ enabled?: boolean, variant?: string, description?: string }`
-- `DELETE /api/admin/flags/:key` - Delete a flag.
+- `DELETE /api/admin/feature-flags/:key` - Delete a flag.
