@@ -47,6 +47,9 @@ const baseSchema = z.object({
   // ── Webhook CORS ─────────────────────────────────────────
   WEBHOOK_CORS_ALLOWED_ORIGINS: z.string().default(""),
 
+  // ── Markets CORS ─────────────────────────────────────────
+  MARKETS_CORS_ALLOWED_ORIGINS: z.string().default(""),
+
   // ── Geo-blocking ──────────────────────────────────────────
   GEO_BLOCKED_COUNTRIES: z.string().default("").transform((val) =>
     val.split(",").map((s) => s.trim().toUpperCase()).filter(Boolean),

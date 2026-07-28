@@ -64,6 +64,14 @@ const mockGetRecommendedMarkets = getRecommendedMarkets as jest.MockedFunction<t
 function makeApp(): express.Express {
   const app = express();
   app.use(express.json());
+  // Inject a default Origin header so the CORS allowlist middleware
+  // applied inside marketsRouter passes in tests.
+  app.use((req, _res, next) => {
+    if (!req.headers["origin"]) {
+      req.headers["origin"] = "http://localhost:5173";
+    }
+    next();
+  });
   app.use("/api/markets", marketsRouter);
   app.use(errorHandler);
   return app;
