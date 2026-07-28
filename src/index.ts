@@ -52,6 +52,7 @@ import { connectWithRetry, closeDb, db } from "./db/client";
 import { stopScheduler } from "./services/scheduler";
 import { startIndexerHealthProbe, stopIndexerHealthProbe } from "./jobs/indexerHealthProbe";
 import { indexerHealthRouter } from "./routes/indexer/health";
+import { indexerCursorRouter } from "./routes/indexer/cursor";
 import { WebhookWorker } from "./workers/webhookWorker";
 import { marketResolverWorker } from "./workers/marketResolver";
 import { backupVerificationWorker } from "./workers/backupVerificationWorker";
@@ -141,6 +142,7 @@ export function createApp(_options: CreateAppOptions = {}): express.Express {
   app.use("/api/health/dependencies", dependenciesRouter);
   app.use("/api/health/version", versionRouter);
   app.use("/api/indexer", indexerHealthRouter);
+  app.use("/api/indexer/cursor", indexerCursorRouter);
 
   const mutationMethods = ["POST", "PATCH"] as const;
   app.use("/api", (req, res, next) =>
