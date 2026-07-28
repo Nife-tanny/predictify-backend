@@ -13,6 +13,7 @@ import {
 } from "../services/notificationPrefs";
 import { markNotificationsAsRead } from "../services/notificationService";
 import { idempotency } from "../middleware/idempotency";
+import { notificationsCors } from "../middleware/cors";
 import { notificationsMetricsMiddleware } from "../metrics/notificationsMetrics";
 
 const notificationCategorySchema = z.enum(notificationCategories);
@@ -51,6 +52,9 @@ const markReadBodySchema = z
 
 export const notificationsRouter = Router();
 
+// Enforce CORS allowlist early so unapproved origins are rejected
+// before any processing (preflight responses cached via Access-Control-Max-Age).
+notificationsRouter.use(notificationsCors());
 notificationsRouter.use(requireAuth);
 notificationsRouter.use(notificationsMetricsMiddleware);
 

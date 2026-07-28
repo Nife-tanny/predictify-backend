@@ -1,3 +1,7 @@
+jest.mock("../src/middleware/cors", () => ({
+  notificationsCors: () => (_req: any, _res: any, next: any) => next(),
+}));
+
 jest.mock("../src/middleware/requireAuth", () => ({
   requireAuth: (req: any, _res: any, next: any) => {
     req.user = { id: "user-123", stellarAddress: "GTEST" };
