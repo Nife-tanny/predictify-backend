@@ -57,16 +57,17 @@ export async function idempotency(req: Request, res: Response, next: NextFunctio
       if (headers[h]) res.setHeader(h, headers[h]);
     }
     res.setHeader("Idempotent-Replayed", "true");
-    return res.status(existing.responseStatus).json(existing.responseBody);
+    return res.status(existing.responseStatus).send(existing.responseBody ?? undefined);
   }
 
   // --- Miss: intercept response so we can persist it ---
-  const originalJson = res.json.bind(res);
+  const originalSend = res.send.bind(res);
 
-  res.json = function (body: unknown) {
-    // Persist after the status code is decided but before flushing.
+  res.send = function (body?: unknown) {
+    const result = originalSend(body);
     const status = res.statusCode;
     const headers: Record<string, string> = {};
+
     for (const h of REPLAY_HEADERS) {
       const v = res.getHeader(h);
       if (v) headers[h] = String(v);
@@ -80,7 +81,7 @@ export async function idempotency(req: Request, res: Response, next: NextFunctio
         .catch((err) => logger.error({ err, key }, "idempotency_persist_failed"));
     }
 
-    return originalJson(body);
+    return result;
   };
 
   next();
