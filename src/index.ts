@@ -7,6 +7,7 @@ import { logger } from "./config/logger";
 import { metricsMiddleware } from "./metrics/httpMetrics";
 import { metricsHistogramMiddleware } from "./middleware/metricsHistogram";
 import { correlationMiddleware } from "./middleware/correlation";
+import { fingerprintMiddleware } from "./middleware/fingerprint";
 import { idempotency } from "./middleware/idempotency";
 import { defaultBodySizeLimitMiddleware, webhookBodySizeLimitMiddleware } from "./middleware/bodySize";
 import { healthRouter } from "./routes/health";
@@ -61,6 +62,7 @@ import { adminRateLimitInspectRouter } from "./routes/admin/rate-limit/inspect";
 import { quotaRequestsRouter } from "./routes/quota/requests";
 import { startSlowQueryAlerter, stopSlowQueryAlerter } from "./workers/slowQueryAlerter";
 import { reportsRouter } from "./routes/reports";
+import { fingerprintRouter } from "./routes/fingerprint";
 import { gracefulShutdown } from "./lifecycle/shutdown";
 
 const docsEnabled = env.NODE_ENV !== "production" || process.env.ENABLE_DOCS === "true";
@@ -133,6 +135,12 @@ export function createApp(_options: CreateAppOptions = {}): express.Express {
   app.use("/api/admin/webhooks", webhookBodySizeLimitMiddleware);
   app.use(defaultBodySizeLimitMiddleware);
 
+  // Compute a stable SHA-256 fingerprint for every request.
+  // Mounted after body-parsing middleware so that req.body is available
+  // for the fingerprint body-hash computation, and after ALS context +
+  // correlationMiddleware so correlationId is available for logging.
+  app.use(fingerprintMiddleware);
+
   app.use(metricsMiddleware);
   app.use(metricsHistogramMiddleware);
   app.use("/health", healthRouter);
@@ -181,6 +189,7 @@ export function createApp(_options: CreateAppOptions = {}): express.Express {
   app.use("/api/admin/schema-versions", adminSchemaVersionsRouter);
   app.use("/api/admin/rate-limit", adminRateLimitInspectRouter);
   app.use("/api/reports", reportsRouter);
+  app.use("/api/fingerprint", fingerprintRouter);
 
 
   app.get("/metrics", async (req, res) => {
