@@ -172,6 +172,7 @@ export function createApp(_options: CreateAppOptions = {}): express.Express {
   app.use("/api/leaderboard", leaderboardRouter);
   app.use("/api/leaderboard/global", globalLeaderboardRouter);
   app.use("/api/rate-limit", rateLimitRouter);
+  app.use("/api/search", searchRouter);
   app.use("/api/quota/requests", quotaRequestsRouter);
   app.use("/api/notifications", notificationsRouter);
   app.use("/api/webhooks", webhooksRouter);
