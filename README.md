@@ -233,6 +233,16 @@ npm test -- tests/refreshToken.test.ts
 
 The refresh-token test suite covers rotation, expiry handling, reuse detection, logout family revocation, and hash-only storage.
 
+## Comments API
+
+Market comments are exposed at:
+
+- **`GET /api/markets/:id/comments`** — cursor-paginated comments for a market (`limit`, `cursor` params)
+- **`GET /api/comments`** — root list endpoint
+- **`POST /api/comments`** — create a comment; supply `outboundUrl` to dispatch a webhook
+
+Every handler generates or preserves an `X-Correlation-Id`, sanitises it (strips characters outside `[A-Za-z0-9\-_]`, max 128 chars), stores it in AsyncLocalStorage, echoes it in the response header, and propagates it to any outbound HTTP call via `fetchWithCorrelationId`. See [docs/comments-api.md](docs/comments-api.md) for the full runbook.
+
 ## Social graph
 
 Follow graph mutations are exposed at:
