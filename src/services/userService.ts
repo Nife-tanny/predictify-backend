@@ -34,14 +34,6 @@ export interface UserProfile {
 }
 
 /** One entry in the public prediction history. */
-import { db } from "../db/client";
-import { users, predictions, markets } from "../db/schema";
-import { and, eq, desc, lt, or, count } from "drizzle-orm";
-import { Result, ok, err } from "../errors/RouteError";
-import { encodeCursor, decodeCursor, Page, clampLimit, DEFAULT_PAGE_SIZE } from "../utils/cursor";
-
-// ── Types ─────────────────────────────────────────────────────────────────
-
 export interface PredictionEntry {
   id: string;
   market: {
@@ -67,22 +59,6 @@ export interface PredictionEntry {
 export async function getUserProfile(
   stellarAddress: string,
 ): Promise<UserProfile | null> {
-  // Stub: always returns null until the DB layer is wired up.
-export interface ProfileTotals {
-  totalPredictions: number;
-  totalAmountStaked: string;
-  wins: number;
-  losses: number;
-}
-
-export interface UserProfile {
-  id: string;
-  stellarAddress: string;
-  joinedAt: string;
-  predictions: PredictionEntry[];
-  totals: ProfileTotals;
-}
-
 export async function getUserProfile(
   stellarAddress: string,
 ): Promise<UserProfile | null> {
