@@ -24,11 +24,8 @@
 import { Router } from "express";
 import { FeatureFlagsService } from "../services/feature-flags.service";
 import { featureFlagsQuerySchema } from "../schemas/feature-flags.schema";
-import { requestTimeout, abortableRace, RequestAbortedError } from "../middleware/timeout";
-import { logger } from "../config/logger";
-
-/** Hard deadline for the flags lookup. Callers receive 504 on breach. */
-const FEATURE_FLAGS_TIMEOUT_MS = 5000;
+import { RouteErrorFactory } from "../errors";
+import { paginate, clampLimit, DEFAULT_PAGE_SIZE } from "../utils/cursor";
 
 export const featureFlagsRouter = Router();
 
@@ -38,38 +35,23 @@ export const featureFlagsRouter = Router();
 // and fires a 504 response if the handler hasn't finished within the deadline.
 // The route handler opts-in to cooperative cancellation via `abortableRace`.
 
-featureFlagsRouter.use(
-  requestTimeout(FEATURE_FLAGS_TIMEOUT_MS, {
-    statusCode: 504,
-    code: "gateway_timeout",
-    message: "Feature-flags request timed out",
-  }),
-);
-
-// ── GET /api/feature-flags ────────────────────────────────────────────────────
-
-featureFlagsRouter.get("/", async (req, res, next) => {
-  // The signal is set by requestTimeout above; may be undefined in isolated
-  // unit tests that mount the handler directly without the middleware.
-  const signal = res.locals.abortSignal as AbortSignal | undefined;
-  const correlationId = (res.locals.correlationId as string | undefined) ?? "unknown";
-
-  // Validate query parameters at the boundary — unknown keys are stripped,
-  // invalid enum values produce a 400 via the global error handler.
-  const parsed = featureFlagsQuerySchema.safeParse(req.query);
-  if (!parsed.success) {
-    res.status(400).json({
-      error: {
-        code: "validation_error",
-        message: parsed.error.issues[0]?.message ?? "Invalid query parameters",
-        requestId: correlationId,
-      },
-    });
-    return;
-  }
-
-  const { environment, clientVersion } = parsed.data;
-
+/**
+ * GET /api/feature-flags
+ * Public endpoint returning active feature flag values for the calling user/client.
+ *
+ * Query parameters:
+ *   - cursor  (optional) — opaque base64url token from the previous page's `next_cursor`
+ *   - limit   (optional, default 20, max 100) — page size
+ *
+ * Response:
+ *   { items: Array<{ id: string, enabled: boolean, variant: string | null }>, next_cursor: string | null, total: number }
+ *
+ * Pagination:
+ *   `next_cursor` is null on the last page.  Pass it verbatim as `?cursor=` to
+ *   fetch the next page.  A missing, tampered, or version-mismatched cursor is
+ *   silently treated as absent (restart from page one) rather than 500-ing.
+ */
+featureFlagsRouter.get("/", (req: Request, res: Response, next: NextFunction) => {
   try {
     // getFlagsForUser is synchronous in the current implementation, but we
     // wrap it in abortableRace so that:
@@ -80,14 +62,29 @@ featureFlagsRouter.get("/", async (req, res, next) => {
       signal,
     );
 
-    logger.info(
-      { correlationId, environment, clientVersion, path: req.path },
-      "feature_flags_fetched",
+    const { cursor, limit: rawLimit } = parseResult.data;
+    const limit = clampLimit(rawLimit, DEFAULT_PAGE_SIZE);
+
+    const flags = getAllFlags();
+    const sorted = [...flags].sort((a, b) => b.id.localeCompare(a.id));
+
+    const page = paginate(
+      sorted,
+      (flag) => ({ sortValue: flag.id, id: flag.id }),
+      cursor,
+      limit,
     );
 
-    res.status(200).json({
-      data: flags,
-      correlationId,
+    const items = page.data.map((flag) => ({
+      id: flag.id,
+      enabled: flag.enabled,
+      variant: flag.variant ?? null,
+    }));
+
+    return res.status(200).json({
+      items,
+      next_cursor: page.nextCursor,
+      total: sorted.length,
     });
   } catch (e) {
     if (e instanceof RequestAbortedError) {

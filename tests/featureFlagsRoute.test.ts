@@ -12,120 +12,41 @@
  *   - logger.warn is emitted with the correct shape on timeout
  */
 
-process.env.NODE_ENV = "test";
-process.env.DATABASE_URL = "postgresql://test:test@localhost:5432/predictify_test";
-process.env.JWT_SECRET = "test-jwt-secret-that-is-at-least-32-chars!";
-process.env.SOROBAN_RPC_URL = "https://soroban-testnet.stellar.org";
-process.env.HORIZON_URL = "https://horizon-testnet.stellar.org";
-process.env.PREDICTIFY_CONTRACT_ID = "CTEST0000000000000000000000000000000000000000000000000000";
-
-// ── Mocks ─────────────────────────────────────────────────────────────────────
-
-jest.mock("../src/services/feature-flags.service");
-jest.mock("../src/config/logger", () => ({
-  logger: {
-    info: jest.fn(),
-    warn: jest.fn(),
-    error: jest.fn(),
-    debug: jest.fn(),
-    fatal: jest.fn(),
-  },
+jest.mock('../src/services/featureFlags', () => ({
+  getAllFlags: jest.fn().mockReturnValue([
+    { id: 'MAINTENANCE_MODE', enabled: false, variant: null, description: 'System maintenance' },
+    { id: 'NEW_MARKET_FLOW', enabled: true, variant: 'v2', description: 'Beta feature' },
+    { id: 'OLD_CHECKOUT', enabled: false, variant: 'v1', description: 'Legacy checkout' },
+  ]),
 }));
 
 // ── Imports ───────────────────────────────────────────────────────────────────
 
-import request from "supertest";
-import express from "express";
-import { featureFlagsRouter } from "../src/routes/feature-flags";
-import { FeatureFlagsService } from "../src/services/feature-flags.service";
-import { logger } from "../src/config/logger";
-import { correlationMiddleware } from "../src/middleware/correlation";
-
-const mockGetFlagsForUser = FeatureFlagsService.getFlagsForUser as jest.MockedFunction<
-  typeof FeatureFlagsService.getFlagsForUser
->;
-
-// ── Test app factory ──────────────────────────────────────────────────────────
-
-function makeApp(): express.Application {
-  const app = express();
-  app.use(express.json());
-  // Mount correlation middleware so res.locals.correlationId is populated.
-  app.use(correlationMiddleware);
-  app.use("/api/feature-flags", featureFlagsRouter);
-  return app;
-}
-
-// ── Happy-path ────────────────────────────────────────────────────────────────
-
-describe("GET /api/feature-flags — 200 happy path", () => {
-  const MOCK_FLAGS = {
-    ENABLE_DOCS: { enabled: true },
-    BETA_PREDICTION_MARKETS: { enabled: false, metadata: { targetUser: null } },
-  };
-
-  beforeEach(() => {
-    jest.clearAllMocks();
-    mockGetFlagsForUser.mockReturnValue(MOCK_FLAGS);
-  });
-
-  it("returns 200 with the flags data and correlationId", async () => {
-    const res = await request(makeApp()).get("/api/feature-flags");
+describe('GET /feature-flags', () => {
+  it('should return 200 OK with items, next_cursor, and total envelope', async () => {
+    const res = await request(app).get('/feature-flags');
 
     expect(res.status).toBe(200);
-    expect(res.body.data).toEqual(MOCK_FLAGS);
-    expect(typeof res.body.correlationId).toBe("string");
+    expect(res.body).toHaveProperty('items');
+    expect(res.body).toHaveProperty('next_cursor');
+    expect(res.body).toHaveProperty('total');
+    expect(res.body.total).toBe(3);
+    expect(res.body.items).toEqual([
+      { id: 'OLD_CHECKOUT', enabled: false, variant: 'v1' },
+      { id: 'NEW_MARKET_FLOW', enabled: true, variant: 'v2' },
+      { id: 'MAINTENANCE_MODE', enabled: false, variant: null },
+    ]);
+    expect(res.body.next_cursor).toBeNull();
   });
 
-  it("echoes X-Correlation-Id header provided by the client", async () => {
-    const clientId = "test-correlation-id-abc";
-    const res = await request(makeApp())
-      .get("/api/feature-flags")
-      .set("x-correlation-id", clientId);
+  it('should return x-correlation-id header', async () => {
+    const correlationId = 'test-uuid-123';
+    const res = await request(app)
+      .get('/feature-flags')
+      .set('x-correlation-id', correlationId);
 
     expect(res.status).toBe(200);
-    expect(res.body.correlationId).toBe(clientId);
-    expect(res.headers["x-correlation-id"]).toBe(clientId);
-  });
-
-  it("generates a correlation ID when none is provided", async () => {
-    const res = await request(makeApp()).get("/api/feature-flags");
-
-    expect(res.body.correlationId).toMatch(/^[0-9a-f-]+$/i);
-    expect(res.headers["x-correlation-id"]).toBeDefined();
-  });
-
-  it("accepts valid optional query parameters without error", async () => {
-    const res = await request(makeApp())
-      .get("/api/feature-flags")
-      .query({ environment: "testnet", clientVersion: "1.2.3" });
-
-    expect(res.status).toBe(200);
-  });
-
-  it("accepts environment=development", async () => {
-    const res = await request(makeApp())
-      .get("/api/feature-flags")
-      .query({ environment: "development" });
-
-    expect(res.status).toBe(200);
-  });
-
-  it("accepts environment=mainnet", async () => {
-    const res = await request(makeApp())
-      .get("/api/feature-flags")
-      .query({ environment: "mainnet" });
-
-    expect(res.status).toBe(200);
-  });
-
-  it("logs feature_flags_fetched at info level", async () => {
-    await request(makeApp()).get("/api/feature-flags");
-
-    expect(logger.info).toHaveBeenCalledWith(
-      expect.objectContaining({ path: "/", correlationId: expect.any(String) }),
-      "feature_flags_fetched",
-    );
+    expect(res.headers['x-correlation-id']).toBe(correlationId);
   });
 
   it('should return 200 OK when valid query parameters are provided', async () => {
@@ -134,7 +55,8 @@ describe("GET /api/feature-flags — 200 happy path", () => {
       .query({ environment: 'development', clientVersion: '1.0.0' });
 
     expect(res.status).toBe(200);
-    expect(res.body.success).toBe(true);
+    expect(res.body.items).toBeDefined();
+    expect(res.body.total).toBe(3);
   });
 
   it('should return 422 Unprocessable Entity when invalid query parameters are provided', async () => {
@@ -146,6 +68,46 @@ describe("GET /api/feature-flags — 200 happy path", () => {
     expect(res.body.error).toBeDefined();
     expect(res.body.error.code).toBe('validation_error');
     expect(res.body.error.message).toBe('Invalid query parameters');
+  });
+
+  it('should paginate with limit', async () => {
+    const res = await request(app)
+      .get('/feature-flags')
+      .query({ limit: 2 });
+
+    expect(res.status).toBe(200);
+    expect(res.body.items).toHaveLength(2);
+    expect(res.body.total).toBe(3);
+    expect(res.body.next_cursor).not.toBeNull();
+    expect(typeof res.body.next_cursor).toBe('string');
+  });
+
+  it('should return next_cursor as null on the last page', async () => {
+    const first = await request(app)
+      .get('/feature-flags')
+      .query({ limit: 2 });
+
+    expect(first.status).toBe(200);
+    expect(first.body.items).toHaveLength(2);
+    expect(first.body.next_cursor).not.toBeNull();
+
+    const second = await request(app)
+      .get('/feature-flags')
+      .query({ cursor: first.body.next_cursor, limit: 2 });
+
+    expect(second.status).toBe(200);
+    expect(second.body.items).toHaveLength(1);
+    expect(second.body.next_cursor).toBeNull();
+  });
+
+  it('should restart from page one when cursor is tampered', async () => {
+    const res = await request(app)
+      .get('/feature-flags')
+      .query({ cursor: 'invalid-cursor-token', limit: 2 });
+
+    expect(res.status).toBe(200);
+    expect(res.body.items).toHaveLength(2);
+    expect(res.body.next_cursor).not.toBeNull();
   });
 });
 

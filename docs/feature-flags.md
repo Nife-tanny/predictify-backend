@@ -117,19 +117,21 @@ The strategy is:
 
 ## Configuration
 
-| Variable                  | Default | Description                              |
-|---------------------------|---------|------------------------------------------|
-| `FLAGS_CACHE_TTL_SECONDS` | `30`    | How often (seconds) the cache is polled. |
+## API Endpoints (Public)
+
+- `GET /api/feature-flags` — List active feature flags.
+  - Query: `cursor` (optional), `limit` (optional, default 20, max 100)
+  - Response: `{ items: Array<{ id, enabled, variant }>, next_cursor: string | null, total: number }`
+  - `next_cursor` is `null` on the last page. Pass it verbatim as `?cursor=` to fetch the next page.
+
+## API Endpoints (Admin Only)
 
 ## Admin API Endpoints
 
-All endpoints require the `Authorization` header with a valid admin JWT. The
-endpoints are rate-limited per admin token.
-
-- `GET /api/admin/feature-flags` — List all flags.
-- `GET /api/admin/feature-flags/:key` — Get a single flag. Returns 404 if not found.
-- `POST /api/admin/feature-flags` — Create a new flag.
-  - Body: `{ key: string, enabled: boolean, description?: string }`
-- `PATCH /api/admin/feature-flags/:key` — Partially update a flag.
-  - Body: `{ enabled?: boolean, description?: string }`
-- `DELETE /api/admin/feature-flags/:key` — Delete a flag.
+- `GET /api/admin/feature-flags` - List all flags.
+- `GET /api/admin/feature-flags/:key` - Get a single flag. Returns 404 if not found.
+- `POST /api/admin/feature-flags` - Create a new flag.
+  - Body: `{ key: string, enabled: boolean, variant?: string, description?: string }`
+- `PATCH /api/admin/feature-flags/:key` - Partially update a flag.
+  - Body: `{ enabled?: boolean, variant?: string, description?: string }`
+- `DELETE /api/admin/feature-flags/:key` - Delete a flag.
