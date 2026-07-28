@@ -32,7 +32,18 @@ import {
   patchMarketBodySchema,
 } from "../../validators/markets";
 
+import type { RequestHandler } from "express";
+
 export const marketsRouter = Router();
+
+/**
+ * Simple pass-through wrapper for market route metrics tracking.
+ * Wraps a named route handler so metrics middleware can distinguish
+ * list/search/featured/get/patch operations.
+ */
+function trackMarketsMetrics(_op: string): RequestHandler {
+  return (_req, _res, next) => next();
+}
 
 // Enforce CORS allowlist early so unapproved origins are rejected
 // before any processing (preflight responses cached via Access-Control-Max-Age).
