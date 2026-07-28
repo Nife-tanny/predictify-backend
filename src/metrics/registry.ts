@@ -26,6 +26,14 @@ export const webhookRequestDuration = new Histogram({
   registers: [register],
 });
 
+export const statsRequestDuration = new Histogram({
+  name: "stats_request_duration_seconds",
+  help: "Latency of /api/stats requests in seconds, segmented by route and status code",
+  labelNames: ["route", "status"] as const,
+  buckets: [0.01, 0.05, 0.1, 0.5, 1, 2, 5, 10], // Explicit buckets for latency tracking
+  registers: [register],
+});
+
 export const indexerPollsTotal = new Counter({
   name: "indexer_polls_total",
   help: "Total number of indexer poll cycles completed",

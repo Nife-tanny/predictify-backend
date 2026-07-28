@@ -1,6 +1,6 @@
-
-import { ZodError } from "zod";
+import type { NextFunction, Request, Response } from "express";
 import { randomUUID } from "crypto";
+import { ZodError } from "zod";
 import { logger } from "../config/logger";
 import { AppError, ErrorCodes, isRouteError, HTTP_STATUS, toErrorEnvelope } from "../errors";
 import { getRequestId } from "../lib/requestContext";
@@ -11,7 +11,9 @@ import { AppError, ErrorCodes, isRouteError, HTTP_STATUS, toErrorEnvelope } from
 import { getRequestId } from "../lib/requestContext";
 
 function requestIdFrom(req: Request, fallback: string): string {
-  return getRequestId() ?? (typeof (req as { id?: unknown }).id === "string" ? (req as { id?: string }).id : undefined) ?? fallback;
+  return getRequestId() ??
+    (typeof (req as { id?: unknown }).id === "string" ? (req as { id?: string }).id : undefined) ??
+    fallback;
 }
 
 export function errorHandler(
@@ -20,7 +22,10 @@ export function errorHandler(
   res: Response,
   _next: NextFunction,
 ) {
-  const correlationId = (req.headers["x-correlation-id"] as string) ?? (typeof (req as { id?: unknown }).id === "string" ? (req as { id?: string }).id : undefined) ?? randomUUID();
+  const correlationId =
+    (req.headers["x-correlation-id"] as string) ??
+    (typeof (req as { id?: unknown }).id === "string" ? (req as { id?: string }).id : undefined) ??
+    randomUUID();
   const reqId = requestIdFrom(req, correlationId);
 
   if (isRouteError(err)) {

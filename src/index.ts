@@ -7,6 +7,7 @@ import { logger } from "./config/logger";
 import { metricsMiddleware } from "./metrics/httpMetrics";
 import { metricsHistogramMiddleware } from "./middleware/metricsHistogram";
 import { correlationMiddleware } from "./middleware/correlation";
+import { fingerprintMiddleware } from "./middleware/fingerprint";
 import { idempotency } from "./middleware/idempotency";
 import { defaultBodySizeLimitMiddleware, webhookBodySizeLimitMiddleware } from "./middleware/bodySize";
 import { healthRouter } from "./routes/health";
@@ -15,25 +16,26 @@ import { createReadyRouter } from "./routes/health/ready";
 import { dependenciesRouter } from "./routes/health/dependencies";
 import { versionRouter } from "./routes/health/version";
 import { redisConnection } from "./queue";
-import { authRouter, setAuthDraining, waitForAuthDrain } from "./routes/auth";
+import { authRouter } from "./routes/auth";
+import { recommendationsRouter } from "./routes/recommendations";
 import { tagsRouter } from "./routes/tags";
 import { auditRouter } from "./routes/audit";
 import { marketsRouter } from "./routes/markets";
 import { commentsRouter } from "./routes/comments";
 import { usersRouter } from "./routes/users";
 import { predictionsRouter } from "./routes/predictions";
-import { usersRouter } from "./routes/users";
 import { usersHealthRouter } from "./routes/users/health";
 import { userPortfolioRouter } from "./routes/users/portfolio";
 import { userStatsRouter } from "./routes/users/stats";
 import { devicesRouter } from "./routes/devices";
+import { featureFlagsRouter } from "./routes/feature-flags";
 import { adminFeatureFlagsRouter } from "./routes/admin/featureFlags";
 import { adminUsersRouter } from "./routes/adminUsers";
 import { adminNotesRouter } from "./routes/admin/users/notes";
 import { leaderboardRouter } from "./routes/leaderboard";
-import { predictionsRouter } from "./routes/predictions";
 import { globalLeaderboardRouter } from "./routes/leaderboard/global";
 import { createDocsRouter } from "./routes/docs";
+import { searchRouter } from "./routes/search";
 
 import { sessionsRouter } from "./routes/me/sessions";
 import { notificationsRouter } from "./routes/notifications";
@@ -50,7 +52,7 @@ import { REQUEST_ID_HEADER } from "./lib/http";
 import { register } from "./metrics/registry";
 import { connectWithRetry, closeDb, db } from "./db/client";
 import { stopScheduler } from "./services/scheduler";
-import { startIndexerHealthProbe, stopIndexerHealthProbe } from "./jobs/indexerHealthProbe";
+import { startIndexerHealthProbe } from "./jobs/indexerHealthProbe";
 import { indexerHealthRouter } from "./routes/indexer/health";
 import { WebhookWorker } from "./workers/webhookWorker";
 import { marketResolverWorker } from "./workers/marketResolver";
@@ -59,9 +61,11 @@ import { reconciliationWorker } from "./workers/reconciliationWorker";
 import { rateLimitRouter } from "./routes/rate-limit";
 import { adminRateLimitInspectRouter } from "./routes/admin/rate-limit/inspect";
 import { quotaRequestsRouter } from "./routes/quota/requests";
-import { startSlowQueryAlerter, stopSlowQueryAlerter } from "./workers/slowQueryAlerter";
+import { startSlowQueryAlerter } from "./workers/slowQueryAlerter";
 import { reportsRouter } from "./routes/reports";
+import { exportsRouter } from "./routes/exports";
 import { gracefulShutdown } from "./lifecycle/shutdown";
+
 
 const docsEnabled = env.NODE_ENV !== "production" || process.env.ENABLE_DOCS === "true";
 
@@ -133,6 +137,12 @@ export function createApp(_options: CreateAppOptions = {}): express.Express {
   app.use("/api/admin/webhooks", webhookBodySizeLimitMiddleware);
   app.use(defaultBodySizeLimitMiddleware);
 
+  // Compute a stable SHA-256 fingerprint for every request.
+  // Mounted after body-parsing middleware so that req.body is available
+  // for the fingerprint body-hash computation, and after ALS context +
+  // correlationMiddleware so correlationId is available for logging.
+  app.use(fingerprintMiddleware);
+
   app.use(metricsMiddleware);
   app.use(metricsHistogramMiddleware);
   app.use("/health", healthRouter);
@@ -150,10 +160,12 @@ export function createApp(_options: CreateAppOptions = {}): express.Express {
   );
 
   app.use("/api/auth", authRouter);
+  app.use("/api/recommendations", recommendationsRouter);
   app.use("/api/tags", tagsRouter);
   app.use("/api/audit", auditRouter);
   app.use("/api/markets", marketsRouter);
   app.use("/api/markets", commentsRouter);
+  app.use("/api/comments", commentsRouter);
   app.use("/api/predictions", predictionsRouter);
   app.use("/api/leaderboard", leaderboardRouter);
   app.use("/api/leaderboard/global", globalLeaderboardRouter);
@@ -176,11 +188,14 @@ export function createApp(_options: CreateAppOptions = {}): express.Express {
   app.use("/api/audit/counts", auditCountsRouter);
   app.use("/api/admin/users", adminUsersRouter);
   app.use("/api/admin/users", adminNotesRouter);
+  app.use("/api/feature-flags", featureFlagsRouter);
   app.use("/api/admin/feature-flags", adminFeatureFlagsRouter);
   app.use("/api/admin/markets", adminMarketsRouter);
   app.use("/api/admin/schema-versions", adminSchemaVersionsRouter);
   app.use("/api/admin/rate-limit", adminRateLimitInspectRouter);
   app.use("/api/reports", reportsRouter);
+  app.use("/api/exports", exportsRouter);
+
 
 
   app.get("/metrics", async (req, res) => {
@@ -204,8 +219,6 @@ export function createApp(_options: CreateAppOptions = {}): express.Express {
 if (require.main === module) {
   const app = createApp();
   let webhookWorker: WebhookWorker | null = null;
-  let probeHandle: ReturnType<typeof setInterval> | null = null;
-
 
   connectWithRetry()
     .then(() => {
@@ -215,7 +228,7 @@ if (require.main === module) {
       backupVerificationWorker.start();
       reconciliationWorker.start();
       startSlowQueryAlerter();
-      probeHandle = startIndexerHealthProbe();
+      startIndexerHealthProbe();
 
       app.listen(env.PORT, () => {
         logger.info({ port: env.PORT, env: env.NODE_ENV }, "predictify-backend listening");

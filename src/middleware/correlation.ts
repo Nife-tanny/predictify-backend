@@ -143,3 +143,6 @@ export function correlationMiddleware(
     );
   }
 }
+
+// ── Outbound call helper re-export ──────────────────────────────────────────
+export { fetchWithCorrelationId } from "../lib/http";

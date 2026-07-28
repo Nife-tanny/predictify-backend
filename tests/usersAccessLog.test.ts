@@ -373,6 +373,37 @@ describe("accessLog middleware", () => {
     );
   });
 
+  it("emits a tags_access_log entry when originalUrl starts with /api/tags", async () => {
+    const req = makeReq({
+      headers: { "x-correlation-id": "tags-log-test-id" },
+      method: "GET",
+      path: "/api/tags",
+      ip: "10.0.0.4",
+    });
+    const res = makeRes();
+    const next: NextFunction = jest.fn();
+
+    accessLog(req, res, next);
+    await fireFinish(res);
+
+    expect(loggerInfoSpy).toHaveBeenCalledWith(
+      expect.objectContaining({
+        correlationId: "tags-log-test-id",
+        method: "GET",
+        path: "/api/tags",
+        statusCode: 200,
+        ip: "10.0.0.4",
+        durationMs: expect.any(Number),
+        "req-id": "tags-log-test-id",
+        status: 200,
+        latency: expect.any(Number),
+        size: 0,
+        actor: "anonymous",
+      }),
+      "tags_access_log",
+    );
+  });
+
   it("logs the correct statusCode for a 400 response", async () => {
     const req = makeReq({ headers: { "x-correlation-id": "bad-req-id" } });
     const res = makeRes();

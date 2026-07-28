@@ -26,6 +26,7 @@ import { logger } from "../config/logger";
 import { getRequestId } from "../lib/requestContext";
 import { webhookCors } from "../middleware/cors";
 import { requireAdmin } from "../middleware/requireAdmin";
+import { webhooksRateLimiter } from "../middleware/rateLimit";
 
 // ---------------------------------------------------------------------------
 // Zod schemas — boundary validation
@@ -40,6 +41,7 @@ export const webhooksRouter = Router();
 // Enforce CORS allowlist before admin auth so unapproved origins are
 // rejected early without leaking auth challenge details.
 webhooksRouter.use(webhookCors());
+webhooksRouter.use(webhooksRateLimiter);
 webhooksRouter.use(requireAdmin);
 
 webhooksRouter.get("/", async (req, res, next) => {
