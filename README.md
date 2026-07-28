@@ -47,6 +47,7 @@ Once running:
 | `GET /healthz/dependencies` | None | Shallow dependency probe — Postgres, Soroban RPC, Horizon, webhook queue (Redis). Cached for 5 s. Returns 200/207/503. |
 | `GET /api/health/ready` | None | **Deep readiness check** — runs four parallel probes with 1-second timeouts each. Returns 200 when ready, 503 when unready. |
 | `GET /api/indexer/health` | None | Indexer health — probes external dependencies (Postgres + Soroban RPC) and compares the persisted cursor against the chain tip. Returns `"ok"` / `"degraded"` / `"down"` with dependency statuses in `dependencies` and lag data in `data`. Always HTTP 200. Supports [ETag / conditional GET](#etag--conditional-get-caching). |
+| `GET /api/recommendations/health` | None | Recommendations subsystem health — probes the two runtime dependencies the recommendations pipeline relies on (Postgres + Soroban RPC). Returns 200 when all pass, 503 when any is down. Response shape mirrors `GET /api/predictions/health`. |
 
 ### `GET /api/health/ready` response
 
