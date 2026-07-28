@@ -391,6 +391,10 @@ export const auditLogs = pgTable(
     ip: text("ip").notNull(),
     correlationId: text("correlation_id").notNull(),
     rateLimitContext: jsonb("rate_limit_context"),
+    /** Snapshot of the relevant state immediately before the mutating action. */
+    beforeState: jsonb("before_state"),
+    /** Snapshot of the relevant state immediately after the mutating action. */
+    afterState: jsonb("after_state"),
     createdAt: timestamp("created_at", { withTimezone: true })
       .notNull()
       .defaultNow(),
