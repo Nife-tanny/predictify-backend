@@ -34,24 +34,24 @@ export interface UserProfile {
 }
 
 /** One entry in the public prediction history. */
+import { db } from "../db/client";
+import { users, predictions, markets } from "../db/schema";
+import { and, eq, desc, lt, or, count } from "drizzle-orm";
+import { Result, ok, err } from "../errors/RouteError";
+import { encodeCursor, decodeCursor, Page, clampLimit, DEFAULT_PAGE_SIZE } from "../utils/cursor";
+
+// ── Types ─────────────────────────────────────────────────────────────────
+
 export interface PredictionEntry {
-  /** UUID of the prediction row. */
   id: string;
-  /** The market this prediction was placed on. */
   market: {
     id: string;
     question: string;
     status: string;
     resolutionTime: string;
   };
-  /** Which outcome the user chose (e.g. "yes" / "no"). */
   outcome: string;
-  /**
-   * Amount staked, stored as a string to preserve precision for large
-   * Stellar stroops values.
-   */
   amount: string;
-  /** ISO-8601 timestamp when the prediction was created. */
   createdAt: string;
 }
 
@@ -68,6 +68,24 @@ export async function getUserProfile(
   stellarAddress: string,
 ): Promise<UserProfile | null> {
   // Stub: always returns null until the DB layer is wired up.
+export interface ProfileTotals {
+  totalPredictions: number;
+  totalAmountStaked: string;
+  wins: number;
+  losses: number;
+}
+
+export interface UserProfile {
+  id: string;
+  stellarAddress: string;
+  joinedAt: string;
+  predictions: PredictionEntry[];
+  totals: ProfileTotals;
+}
+
+export async function getUserProfile(
+  stellarAddress: string,
+): Promise<UserProfile | null> {
   void stellarAddress;
   return null;
 }
@@ -79,6 +97,24 @@ export async function getUserProfile(
  * Throws if the user row no longer exists (TOCTOU race).
  */
 export async function getCurrentUserProfile(userId: string): Promise<UserProfile> {
+export interface CurrentUserProfile {
+  stellarAddress: string;
+  createdAt: string;
+  totals: {
+    prediction_count: number;
+    claim_count: number;
+  };
+}
+
+/**
+ * Returns the authenticated user's profile (stellarAddress, createdAt) along
+ * with aggregate counts of their predictions.  Two queries run
+ * in parallel via Promise.all:
+ *
+ *   1. users      — by PK (UUID), cheap point-lookup
+ *   2. predictions — COUNT(*) filtered by user_id (FK index)
+ */
+export async function getCurrentUserProfile(userId: string): Promise<Result<CurrentUserProfile>> {
   const [userRow, predCountRow] = await Promise.all([
     db
       .select({
@@ -97,13 +133,20 @@ export async function getCurrentUserProfile(userId: string): Promise<UserProfile
 
   const user = userRow[0];
   if (!user) {
-    throw new Error("user row vanished mid-request");
+    return err({
+      kind: "NotFound",
+      message: "User not found",
+      resource: "User",
+    });
   }
 
   const totalPredictions = Number(predCountRow[0]?.value ?? 0);
 
   return {
     id: user.id,
+  const prediction_count = Number(predCountRow[0]?.value ?? 0);
+
+  return ok({
     stellarAddress: user.stellarAddress,
     createdAt: user.createdAt.toISOString(),
     predictions: [],
@@ -112,6 +155,196 @@ export async function getCurrentUserProfile(userId: string): Promise<UserProfile
       totalAmountStaked: "0",
       wins: 0,
       losses: 0,
+      prediction_count,
+      claim_count: 0,
     },
+  });
+}
+
+export async function getUserByAddress(address: string) {
+  return db.query.users.findFirst({
+    where: eq(users.stellarAddress, address),
+  });
+}
+
+/**
+ * Serialised shape of a single prediction row returned to callers.
+ */
+export interface UserPredictionRow {
+  id: string;
+  marketId: string;
+  question: string;
+  outcome: string;
+  amount: string;
+  status: string;
+  createdAt: string;
+  resolutionTime: string;
+}
+
+/**
+ * Fetch one page of predictions for a user using keyset (cursor) pagination.
+ *
+ * Sort order: (createdAt DESC, id DESC) — stable even when two predictions
+ * share the same timestamp because the UUID tie-breaker is unique.
+ *
+ * Cursor format: the shared `encodeCursor` / `decodeCursor` helpers in
+ * `src/utils/cursor.ts` encode `{ sortValue: createdAt ISO-string, id }` as a
+ * versioned, opaque base64url token.  A cursor minted under a different schema
+ * version is silently treated as absent (restart from page one) rather than
+ * causing a wrong-offset query or a 500.
+ *
+ * Keyset WHERE clause for DESC ordering:
+ *   (createdAt < cursorTime) OR (createdAt = cursorTime AND id < cursorId)
+ *
+ * This is the standard two-column keyset predicate: rows that sort strictly
+ * after the last item on the previous page, respecting both columns of the
+ * composite sort key.
+ */
+export async function getUserPredictions(
+  userId: string,
+  opts: {
+    status?: string;
+    limit: number;
+    cursor?: string;
+  },
+): Promise<Page<UserPredictionRow>> {
+  const { status, limit, cursor } = opts;
+
+  // Base conditions — always scope to this user.
+  const baseConditions = [eq(predictions.userId, userId)];
+
+  if (status) {
+    baseConditions.push(eq(predictions.status, status));
+  }
+
+  // Decode the opaque cursor.  An invalid or version-mismatched token is
+  // treated as absent so a tampered ?cursor= value never causes a 500.
+  const cursorKey = decodeCursor(cursor);
+
+  if (cursorKey) {
+    const cursorTime = new Date(cursorKey.sortValue);
+    // Standard two-column keyset predicate for DESC (createdAt, id) ordering:
+    //   rows where createdAt is strictly earlier, OR same timestamp with a
+    //   lexicographically smaller UUID (which is also numerically earlier).
+    baseConditions.push(
+      or(
+        lt(predictions.createdAt, cursorTime),
+        and(
+          eq(predictions.createdAt, cursorTime),
+          lt(predictions.id, cursorKey.id),
+        ),
+      )!,
+    );
+  }
+
+  // Fetch one extra row to determine whether a next page exists.
+  const results = await db
+    .select({
+      id: predictions.id,
+      marketId: predictions.marketId,
+      question: markets.question,
+      outcome: predictions.outcome,
+      amount: predictions.amount,
+      status: predictions.status,
+      createdAt: predictions.createdAt,
+      resolutionTime: markets.resolutionTime,
+    })
+    .from(predictions)
+    .innerJoin(markets, eq(predictions.marketId, markets.id))
+    .where(and(...baseConditions))
+    .orderBy(desc(predictions.createdAt), desc(predictions.id))
+    .limit(limit + 1);
+
+  const hasMore = results.length > limit;
+  const data = results.slice(0, limit);
+
+  // Encode the cursor from the last row on this page using the shared helper,
+  // which stamps the current CURSOR_VERSION into the token so stale cursors
+  // are rejected after schema migrations rather than silently mis-paginating.
+  const last = data[data.length - 1];
+  const nextCursor =
+    hasMore && last
+      ? encodeCursor({ sortValue: last.createdAt.toISOString(), id: last.id })
+      : null;
+
+  return {
+    data: data.map((r) => ({
+      ...r,
+      createdAt: r.createdAt.toISOString(),
+      resolutionTime: r.resolutionTime.toISOString(),
+    })),
+    nextCursor,
+  };
+}
+
+// ── listUsers ──────────────────────────────────────────────────────────────
+
+/**
+ * Serialised shape of a single user row returned by GET /api/users.
+ */
+export interface UserListRow {
+  id: string;
+  stellarAddress: string;
+  createdAt: string;
+}
+
+/**
+ * Return a cursor-paginated list of all users, sorted DESC by (createdAt, id)
+ * for stable ordering even when two users share the same timestamp.
+ *
+ * Cursor format: opaque base64url token encoding `{ sortValue: createdAt ISO,
+ * id }` via the shared `encodeCursor` / `decodeCursor` helpers in
+ * `src/utils/cursor.ts`.  A missing, tampered, or version-mismatched cursor
+ * is silently treated as absent (restart from page one) rather than 500-ing.
+ *
+ * Keyset WHERE clause for DESC (createdAt, id):
+ *   (createdAt < cursorTime) OR (createdAt = cursorTime AND id < cursorId)
+ *
+ * Fetch limit + 1 rows so we can detect whether a next page exists without
+ * a separate COUNT query.
+ */
+export async function listUsers(opts: {
+  cursor?: string;
+  limit?: number;
+}): Promise<Page<UserListRow>> {
+  const limit = clampLimit(opts.limit ?? DEFAULT_PAGE_SIZE);
+  const cursorKey = decodeCursor(opts.cursor);
+
+  const conditions: ReturnType<typeof eq>[] = [];
+
+  if (cursorKey) {
+    const cursorTime = new Date(cursorKey.sortValue);
+    conditions.push(
+      or(
+        lt(users.createdAt, cursorTime),
+        and(eq(users.createdAt, cursorTime), lt(users.id, cursorKey.id)),
+      )! as ReturnType<typeof eq>,
+    );
+  }
+
+  const rows = await db
+    .select({
+      id: users.id,
+      stellarAddress: users.stellarAddress,
+      createdAt: users.createdAt,
+    })
+    .from(users)
+    .where(conditions.length ? and(...conditions) : undefined)
+    .orderBy(desc(users.createdAt), desc(users.id))
+    .limit(limit + 1);
+
+  const hasMore = rows.length > limit;
+  const data = rows.slice(0, limit);
+  const last = data[data.length - 1];
+
+  return {
+    data: data.map((r) => ({
+      ...r,
+      createdAt: r.createdAt.toISOString(),
+    })),
+    nextCursor:
+      hasMore && last
+        ? encodeCursor({ sortValue: last.createdAt.toISOString(), id: last.id })
+        : null,
   };
 }

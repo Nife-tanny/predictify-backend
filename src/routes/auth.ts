@@ -1,19 +1,47 @@
 import { Router } from "express";
 import { z } from "zod";
 import { StrKey } from "@stellar/stellar-sdk";
+import { conditionalGet } from "../middleware/etag";
+import { createPerUserRateLimiter } from "../middleware/rateLimit";
 import {
-  RefreshTokenError,
   rotateRefreshToken,
   revokeFamily,
 } from "../services/refreshTokenService";
 import { createChallenge } from "../services/authChallengeService";
-import { verifyChallengeAndIssueJwt, AuthVerifyError } from "../services/authVerifyService";
-import { logger } from "../config/logger";
+import { verifyChallengeAndIssueJwt } from "../services/authVerifyService";
+import { RouteErrorFactory } from "../errors";
+import { conditionalGet } from "../middleware/etag";
+import { accessLog } from "../middleware/accessLog";
+import { requestTimeout } from "../middleware/timeout";
+import { loginRateLimit } from "../middleware/loginRateLimit";
+import { authHealthRouter } from "./auth/health";
 
 export const authRouter = Router();
+authRouter.use(accessLog);
+authRouter.use(requestTimeout(15000));
+
+// ── Health probe (no auth required) ───────────────────────────────────────
+authRouter.use("/health", authHealthRouter);
+
+function getAuthRateLimitKey(req: { body?: unknown; socket?: { remoteAddress?: string | null } }): string {
+  const body = typeof req.body === "object" && req.body !== null ? req.body as Record<string, unknown> : undefined;
+  const stellarAddress = typeof body?.stellarAddress === "string" ? body.stellarAddress.trim() : "";
+
+  if (stellarAddress.length > 0) {
+    return `auth:${stellarAddress}`;
+  }
+
+  return `ip:${req.socket?.remoteAddress ?? "unknown"}`;
+}
+
+authRouter.use(createPerUserRateLimiter({
+  windowMs: 60 * 1000,
+  limit: 5,
+  keyGenerator: (req) => getAuthRateLimitKey(req),
+}));
 
 const refreshTokenBodySchema = z.object({
-  refreshToken: z.string().min(1),
+  refreshToken: z.string().refine((addr) => StrKey.isValidEd25519PublicKey(addr), { message: "Invalid Stellar ed25519 public key" }),
 });
 
 function parseRefreshToken(body: unknown): string | null {
@@ -26,27 +54,18 @@ authRouter.post("/refresh", async (req, res, next) => {
     const refreshToken = parseRefreshToken(req.body);
 
     if (!refreshToken) {
-      res.status(400).json({
-        error: { code: "invalid_request", message: "refreshToken is required and must be a string" },
-      });
-      return;
+      throw RouteErrorFactory.badRequest("refreshToken is required and must be a string");
     }
 
-    const tokens = await rotateRefreshToken(refreshToken);
-    res.json(tokens);
+    const result = await rotateRefreshToken(refreshToken);
+    if (!result.ok) {
+      throw result.error;
+    }
+
+    if (conditionalGet(result.value, req, res)) return;
+
+    res.json(result.value);
   } catch (err) {
-    if (err instanceof RefreshTokenError) {
-      logger.warn({ code: err.code }, "token_refresh_failed");
-
-      if (err.code === "reuseDetected") {
-        res.status(403).json({ error: { code: "token_reuse_detected" } });
-        return;
-      }
-
-      res.status(401).json({ error: { code: "invalid_token" } });
-      return;
-    }
-
     next(err);
   }
 });
@@ -56,42 +75,51 @@ authRouter.post("/logout", async (req, res, next) => {
     const refreshToken = parseRefreshToken(req.body);
 
     if (!refreshToken) {
-      res.status(400).json({
-        error: { code: "invalid_request", message: "refreshToken is required and must be a string" },
-      });
-      return;
+      throw RouteErrorFactory.badRequest("refreshToken is required and must be a string");
     }
 
     await revokeFamily(refreshToken);
     res.status(204).send();
   } catch (err) {
-    if (err instanceof RefreshTokenError) {
-      res.status(401).json({ error: { code: "invalid_token" } });
-      return;
+    next(err);
+  }
+});
+
+authRouter.post("/wallet/logout", async (req, res, next) => {
+  try {
+    const refreshToken = parseRefreshToken(req.body);
+
+    if (!refreshToken) {
+      throw RouteErrorFactory.badRequest("refreshToken is required and must be a string");
     }
+
+    await revokeFamily(refreshToken);
+    res.status(204).send();
+  } catch (err) {
     next(err);
   }
 });
 
 const challengeBodySchema = z.object({
-  stellarAddress: z.string().min(1),
+  stellarAddress: z.string().refine((addr) => StrKey.isValidEd25519PublicKey(addr), { message: "Invalid Stellar ed25519 public key" }),
 });
 
-authRouter.post("/challenge", async (req, res, next) => {
+authRouter.post("/challenge", loginRateLimit, async (req, res, next) => {
   try {
     const parsed = challengeBodySchema.safeParse(req.body);
     if (!parsed.success) {
-      res.status(400).json({
-        error: { code: "invalid_request", message: "stellarAddress is required" },
-      });
-      return;
+      throw RouteErrorFactory.validation("Invalid request body", parsed.error.flatten().fieldErrors as Record<string, string[]>);
     }
 
     const result = await createChallenge(parsed.data.stellarAddress);
-    res.status(201).json({
+    const payload = {
       nonce: result.nonce,
       expiresAt: result.expiresAt.toISOString(),
-    });
+    };
+
+    if (conditionalGet(payload, req, res)) return;
+
+    res.status(201).json(payload);
   } catch (e) {
     next(e);
   }
@@ -102,18 +130,15 @@ const verifyBodySchema = z.object({
     (addr) => StrKey.isValidEd25519PublicKey(addr),
     { message: "Invalid Stellar ed25519 public key" },
   ),
-  nonce: z.string().min(1),
-  signature: z.string().min(1),
+  nonce: z.string().refine((addr) => StrKey.isValidEd25519PublicKey(addr), { message: "Invalid Stellar ed25519 public key" }),
+  signature: z.string().refine((addr) => StrKey.isValidEd25519PublicKey(addr), { message: "Invalid Stellar ed25519 public key" }),
 });
 
-authRouter.post("/verify", async (req, res, next) => {
+authRouter.post("/verify", loginRateLimit, async (req, res, next) => {
   try {
     const parsed = verifyBodySchema.safeParse(req.body);
     if (!parsed.success) {
-      res.status(400).json({
-        error: { code: "invalid_request", details: parsed.error.issues },
-      });
-      return;
+      throw RouteErrorFactory.validation("Invalid request body", parsed.error.flatten().fieldErrors as Record<string, string[]>);
     }
 
     const result = await verifyChallengeAndIssueJwt(
@@ -122,12 +147,14 @@ authRouter.post("/verify", async (req, res, next) => {
       parsed.data.signature,
     );
 
-    res.status(200).json(result);
-  } catch (e) {
-    if (e instanceof AuthVerifyError) {
-      res.status(e.status).json({ error: { code: e.code } });
-      return;
+    if (!result.ok) {
+      throw result.error;
     }
+
+    if (conditionalGet(result.value, req, res)) return;
+
+    res.status(200).json(result.value);
+  } catch (e) {
     next(e);
   }
 });

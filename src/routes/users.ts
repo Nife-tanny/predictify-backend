@@ -1,124 +1,322 @@
 /**
- * users.ts
+ * @module routes/users
  *
- * Public user-profile routes.
+ * Public user-facing routes:
  *
- * Routes
- * ──────
+ *   GET /api/users
+ *     Cursor-paginated list of registered users (DESC createdAt, DESC id).
+ *     Query: cursor?, limit (default 20, max 100)
+ *     Supports strong ETag / 304 conditional GET.
+ *
+ *   GET /api/users/me
+ *     Returns the authenticated user's own profile.  Requires a valid JWT
+ *     (responds 403 on missing/invalid token via `requireAuthForbidden`).
+ *     Supports strong ETag / 304 conditional GET.
+ *
+ *   GET /api/users/:address/predictions
+ *     Returns a cursor-paginated list of predictions for the given Stellar
+ *     address.  The address must be a valid Stellar public key (G…).
+ *     Query: status?, cursor?, limit (default 20, max 100)
+ *     Supports strong ETag / 304 conditional GET.
+ *
  *   GET /api/users/:stellarAddress/profile
- *     Returns the public profile for a Stellar account address.
- *     The response contains the user's prediction history and aggregate
- *     totals. No authentication is required — all data exposed here is
- *     considered public information (it mirrors what is visible on-chain).
+ *     Returns the public profile for any Stellar address.
+ *     404 when no matching user row exists.
+ *     Supports strong ETag / 304 conditional GET.
  *
- * Privacy
- * ───────
- *   - Only the Stellar address (already public on-chain) is returned.
- *   - No email, IP address, or other off-chain PII is exposed.
- *   - Internal database UUIDs are included so that clients can build
- *     links, but they carry no sensitive meaning.
+ * All routes are wrapped by `accessLog` which:
+ *   - Resolves / generates a correlation ID (X-Correlation-Id → X-Request-Id
+ *     → req.id → new UUID) and stamps it on `res.locals.correlationId`.
+ *   - Echoes the correlation ID back via the X-Correlation-Id response header.
+ *   - Emits a structured `users_access_log` entry on every response finish.
  *
- * Error codes
- * ───────────
- *   404  not_found        — no user registered with that Stellar address
- *   400  validation_error — address fails basic format validation
- *   500  internal_error   — unexpected server error (via global handler)
+ * Rate limiting (issue #411 / users-rl-v7):
+ *   - `createPerUserRateLimiter` (60 req/min, IETF draft-7 headers) on each route.
+ *   - `GET /me` authenticates first, then keys by `users:{user.id}`.
+ *   - Public GETs fall back to `users:ip:{ip}` (no soft auth — preserves 403/401 contracts).
+ *   - `/api/users/health` is mounted separately and is not throttled here.
  */
 
 import { Router, Request, Response, NextFunction } from "express";
-import { getCurrentUserProfile } from "../services/userService";
+import { z } from "zod";
+import {
+  getUserByAddress,
+  getUserPredictions,
+  getCurrentUserProfile,
+  getUserProfile,
+  listUsers,
+} from "../services/userService";
 import { requireAuthForbidden } from "../middleware/requireAuth";
 import { AuthenticatedRequest } from "../middleware/auth";
+import { accessLog } from "../middleware/accessLog";
+import { createPerUserRateLimiter } from "../middleware/rateLimit";
+import { conditionalGet } from "../middleware/etag";
+import { createPerUserRateLimiter } from "../middleware/rateLimit";
 import { logger } from "../config/logger";
 import { getRequestId } from "../lib/requestContext";
+import { clampLimit, DEFAULT_PAGE_SIZE } from "../utils/cursor";
+import { createPerUserRateLimiter } from "../middleware/rateLimit";
+import { RouteErrorFactory } from "../errors";
+import { requestTimeout } from "../middleware/timeout";
+import { usersMetricsMiddleware } from "../metrics/usersMetrics";
+import {
+  listUsersQuerySchema,
+  userPredictionsParamsSchema,
+  userPredictionsQuerySchema,
+  userProfileParamsSchema,
+} from "../validators/users";
 
 export const usersRouter = Router();
 
-// ── Validation ────────────────────────────────────────────────────────────
-
 /**
- * GET /api/users/me
- * --------------------
- * Returns the authenticated user's own profile (no path parameter).
- *
- *   {
- *     "data": {
- *       "stellarAddress": "G…",
- *       "createdAt":      "2024-…Z",
- *       "totals": { "prediction_count": N, "claim_count": M }
- *     }
- *   }
- *
- * Authentication is enforced by `requireAuthForbidden` — the issue spec
- * (#132) requires **HTTP 403** for unauthenticated callers, which differs
- * from the standard `requireAuth` (HTTP 401).  Path order matters: this
- * route must be registered before `/:address/predictions` so Express does
- * not capture "me" as an address parameter.
+ * Shared /api/users limiter. Authenticated requests (req.user set) use
+ * `users:{id}`; anonymous traffic uses `users:ip:{ip}`.
  */
-usersRouter.get("/me", requireAuthForbidden, async (req: AuthenticatedRequest, res, next) => {
-  try {
-    // requireAuthForbidden guarantees req.user is populated when next() is
-    // called.  Use the existing AuthenticatedRequest type so we don't need
-    // a global Request augmentation just for this one route.
-    const userId = req.user!.id;
-    const profile = await getCurrentUserProfile(userId);
-    logger.info(
-      { userId, stellarAddress: profile.stellarAddress, ...profile.totals },
-      "user_me_profile_loaded",
-    );
-    return res.json({ data: profile });
-  } catch (e) {
-    // The global errorHandler shapes AppError instances into the standard
-    // JSON envelope (e.g. AppError not_found → 404 not_found), so we simply
-    // propagate.  Anything else is a 500 internal_error there.
-    return next(e);
-  }
+const usersRateLimit = createPerUserRateLimiter({
+  windowMs: 60 * 1000,
+  limit: 60,
+  keyGenerator: (req) => {
+    const userId = (req as AuthenticatedRequest).user?.id;
+    if (typeof userId === "string" && userId.trim().length > 0) {
+      return `users:${userId}`;
+    }
+    return `users:ip:${req.socket?.remoteAddress ?? "unknown"}`;
+  },
 });
 
-// ── Route ─────────────────────────────────────────────────────────────────
+// ---------------------------------------------------------------------------
+// Access log — must be the first middleware so every handler inherits the
+// correlation ID via res.locals.correlationId.
+// ---------------------------------------------------------------------------
+usersRouter.use(accessLog);
+
+// ---------------------------------------------------------------------------
+// Per-request timeout with graceful abort on /api/users
+// ---------------------------------------------------------------------------
+usersRouter.use(requestTimeout(15000)); // 15 seconds timeout
+
+// ---------------------------------------------------------------------------
+// Per-endpoint Prometheus metrics for /api/users
+// ---------------------------------------------------------------------------
+usersRouter.use(usersMetricsMiddleware);
+
+// ---------------------------------------------------------------------------
+// GET /api/users
+// ---------------------------------------------------------------------------
 
 /**
- * GET /api/users/:stellarAddress/profile
+ * Returns a cursor-paginated list of all registered users, sorted newest-first
+ * (DESC createdAt, DESC id).  The composite sort key `(createdAt, id)` is
+ * stable: even when two users are created in the same millisecond the UUID
+ * tie-breaker is unique, so pages never overlap or skip rows.
  *
- * Public endpoint — no authentication required.
+ * Query parameters:
+ *   - cursor  (optional) — opaque base64url token from the previous page's `nextCursor`
+ *   - limit   (optional, default 20, max 100) — page size
  *
- * Returns the profile for the user identified by `stellarAddress`.
+ * Response:
+ *   { data: UserListRow[], nextCursor: string | null }
  *
- * Example response (200):
- * ```json
- * {
- *   "data": {
- *     "id": "3fa85f64-...",
- *     "stellarAddress": "GABC...XYZ",
- *     "joinedAt": "2024-01-15T10:30:00.000Z",
- *     "predictions": [
- *       {
- *         "id": "7c9e6679-...",
- *         "market": {
- *           "id": "market-contract-id",
- *           "question": "Will BTC exceed $100k by end of 2025?",
- *           "status": "resolved",
- *           "resolutionTime": "2025-12-31T23:59:59.000Z"
- *         },
- *         "outcome": "yes",
- *         "amount": "5000000",
- *         "createdAt": "2024-03-01T08:00:00.000Z"
- *       }
- *     ],
- *     "totals": {
- *       "totalPredictions": 1,
- *       "totalAmountStaked": "5000000",
- *       "wins": 1,
- *       "losses": 0
- *     }
- *   }
- * }
- * ```
+ * Pagination:
+ *   `nextCursor` is null on the last page.  Pass it verbatim as `?cursor=` to
+ *   fetch the next page.  A missing, tampered, or version-mismatched cursor is
+ *   silently treated as absent (restart from page one) rather than 500-ing.
+ *
+ * Caching:
+ *   Strong ETag on the page payload; clients may revalidate with If-None-Match
+ *   and receive 304 Not Modified when the page is unchanged.
+ *
+ * Errors:
+ *   400 validation_error — query params fail the zod schema
  */
 usersRouter.get(
-  "/:stellarAddress/profile",
+  "/",
+  usersRateLimit,
   async (req: Request, res: Response, next: NextFunction) => {
     const reqId = getRequestId();
+
+    try {
+      const querySchema = z.object({
+        cursor: z.string().optional(),
+        limit: z.coerce
+          .number()
+          .int()
+          .min(1)
+          .max(100)
+          .default(DEFAULT_PAGE_SIZE),
+      });
+
+      const queryParse = querySchema.safeParse(req.query);
+      if (!queryParse.success) {
+        logger.warn(
+          { reqId, issues: queryParse.error.issues },
+          "users_list_invalid_query",
+        );
+        return res.status(400).json({
+          error: {
+            code: "validation_error",
+            message:
+              queryParse.error.issues[0]?.message ?? "invalid query parameters",
+            requestId: reqId,
+          },
+        });
+      }
+
+      const { cursor, limit: rawLimit } = queryParse.data;
+      const limit = clampLimit(rawLimit);
+
+      logger.debug({ reqId, limit, hasCursor: !!cursor }, "users_list_request");
+
+      const page = await listUsers({ cursor, limit });
+
+      logger.info(
+        { reqId, count: page.data.length, hasNext: !!page.nextCursor },
+        "users_list_served",
+      );
+
+      return res.json({ data: page.data, nextCursor: page.nextCursor });
+    } catch (e) {
+      return next(e);
+    }
+  },
+);
+
+usersRouter.get(
+  "/me",
+  requireAuthForbidden,
+  usersRateLimit,
+  async (req: AuthenticatedRequest, res, next) => {
+    const correlationId =
+      (res.locals.correlationId as string | undefined) ?? getRequestId();
+    try {
+      const userId = req.user!.id;
+      const result = await getCurrentUserProfile(userId);
+
+      if (!result.ok) {
+        throw result.error;
+      }
+
+      const profile = result.value;
+      logger.info(
+        {
+          correlationId,
+          userId,
+          stellarAddress: profile.stellarAddress,
+          ...profile.totals,
+        },
+        "user_me_profile_loaded",
+      );
+
+      // Strong ETag on the profile payload; 304 if client already has it.
+      const responsePayload = { data: profile };
+      if (conditionalGet(responsePayload, req, res)) return;
+      return res.json(responsePayload);
+    } catch (e) {
+      return next(e);
+    }
+  },
+);
+
+// ---------------------------------------------------------------------------
+// GET /api/users/me
+// ---------------------------------------------------------------------------
+usersRouter.get(
+  "/me",
+  requireAuthForbidden,
+  usersRateLimit,
+  async (req: AuthenticatedRequest, res, next) => {
+    const correlationId = res.locals.correlationId as string;
+
+    try {
+      const userId = req.user!.id;
+      const result = await getCurrentUserProfile(userId);
+
+      if (!result.ok) {
+        throw result.error;
+      }
+
+      const profile = result.value;
+      logger.info(
+        {
+          correlationId,
+          userId,
+          stellarAddress: profile.stellarAddress,
+          ...profile.totals,
+        },
+        "user_me_profile_loaded",
+      );
+
+      // Strong ETag on the profile payload; 304 if client already has it.
+      const responsePayload = { data: profile };
+      if (conditionalGet(responsePayload, req, res)) return;
+      return res.json(responsePayload);
+    } catch (e) {
+      return next(e);
+    }
+  },
+);
+
+// ---------------------------------------------------------------------------
+// GET /api/users/:address/predictions
+// ---------------------------------------------------------------------------
+/**
+ * Returns a cursor-paginated list of predictions for the given Stellar address.
+ *
+ * Query parameters:
+ *   - status  (optional) — filter by prediction status enum
+ *   - cursor  (optional) — opaque base64url token from the previous page's `nextCursor`
+ *   - limit   (optional, default 20, max 100) — page size
+ *
+ * Response:
+ *   { data: UserPredictionRow[], nextCursor: string | null }
+ *
+ * Pagination:
+ *   `nextCursor` is null on the last page.  Pass it verbatim as `?cursor=` to
+ *   fetch the next page.  Cursors are versioned; a stale cursor from before a
+ *   schema migration is safely rejected and restarts from page one rather than
+ *   silently returning a wrong offset.
+ *
+ * Caching:
+ *   Strong ETag on the page payload; clients may revalidate with If-None-Match
+ *   and receive 304 Not Modified when the page is unchanged.
+ *
+ * Errors:
+ *   400 invalid_address  — path param is not a valid G… Stellar address
+ *   400 validation_error — query params fail the zod schema
+ *   404 not_found        — no user row for that address
+ */
+usersRouter.get(
+  "/:address/predictions",
+  usersRateLimit,
+  async (req: Request, res: Response, next: NextFunction) => {
+    // Prefer the access-log correlation ID; fall back to ALS for non-route callers.
+    const correlationId =
+      (res.locals.correlationId as string | undefined) ?? getRequestId();
+    const reqId = correlationId;
+
+    try {
+      // Validate the path parameter :address at the route boundary before touching the DB.
+      const paramsParse = userPredictionsParamsSchema.safeParse(req.params);
+      if (!paramsParse.success) {
+        logger.warn(
+          {
+            correlationId,
+            reqId,
+            address: req.params.address,
+            issues: paramsParse.error.issues,
+          },
+          "predictions_invalid_address",
+        );
+        return res.status(400).json({
+          error: {
+            code: "invalid_address",
+            message:
+              paramsParse.error.issues[0]?.message ?? "invalid stellar address",
+            requestId: reqId,
+          },
+        });
+      }
+      const { address } = paramsParse.data;
 
     // ── 1. Input validation ──────────────────────────────────────────────
     const stellarAddress = req.params.stellarAddress as string;
@@ -137,28 +335,133 @@ usersRouter.get(
     }
 
     // ── 2. Service call ──────────────────────────────────────────────────
-    try {
-      logger.debug({ reqId, stellarAddress }, "user_profile_lookup");
-
-      const profile = await getCurrentUserProfile(stellarAddress);
-
-      if (!profile) {
-        logger.debug({ reqId, stellarAddress }, "user_profile_not_found");
-        return res.status(404).json({
+      // Validate and coerce query parameters with zod.
+      const queryParse = userPredictionsQuerySchema.safeParse(req.query);
+      if (!queryParse.success) {
+        logger.warn(
+          { correlationId, reqId, address, issues: queryParse.error.issues },
+          "predictions_invalid_query",
+        );
+        return res.status(400).json({
           error: {
-            code: "not_found",
-            message: "no user found with that stellar address",
+            code: "validation_error",
+            message:
+              queryParse.error.issues[0]?.message ?? "invalid query parameters",
             requestId: reqId,
           },
         });
       }
 
+      const { status, cursor, limit: rawLimit } = queryParse.data;
+      // clampLimit is a belt-and-suspenders guard; zod already enforces 1–100.
+      const limit = clampLimit(rawLimit);
+
+      logger.debug(
+        { correlationId, reqId, address, status, limit, hasCursor: !!cursor },
+        "predictions_request",
+      );
+
+      const user = await getUserByAddress(address);
+      if (!user) {
+        logger.debug(
+          { correlationId, reqId, address },
+          "predictions_user_not_found",
+        );
+        return res
+          .status(404)
+          .json({ error: { code: "not_found", requestId: reqId } });
+      }
+
+      const page = await getUserPredictions(user.id, { status, limit, cursor });
+
+      logger.info(
+        {
+          correlationId,
+          reqId,
+          address,
+          userId: user.id,
+          count: page.data.length,
+          hasNext: !!page.nextCursor,
+        },
+        "predictions_page_served",
+      );
+
+      // Strong ETag on the page payload; 304 if client already has it.
+      const responsePayload = { data: page.data, nextCursor: page.nextCursor };
+      if (conditionalGet(responsePayload, req, res)) return;
+      return res.json(responsePayload);
+    } catch (e) {
+      return next(e);
+    }
+  },
+);
+
+// ---------------------------------------------------------------------------
+// GET /api/users/:stellarAddress/profile
+// ---------------------------------------------------------------------------
+usersRouter.get(
+  "/:stellarAddress/profile",
+  usersRateLimit,
+  async (req, res, next) => {
+    const correlationId =
+      (res.locals.correlationId as string | undefined) ?? getRequestId();
+    const reqId = correlationId;
+
+    const parseResult = userProfileParamsSchema.safeParse(req.params);
+    if (!parseResult.success) {
+      logger.warn(
+        {
+          correlationId,
+          reqId,
+          stellarAddress: req.params.stellarAddress,
+          issues: parseResult.error.issues,
+        },
+        "user_profile_validation_failed",
+      );
+      // Use next() so the error flows through the global error handler.
+      return next(
+        RouteErrorFactory.validation(
+          parseResult.error.issues[0]?.message ?? "invalid stellar address",
+        ),
+      );
+    }
+
+    const { stellarAddress } = parseResult.data;
+
+    try {
+      logger.debug(
+        { correlationId, reqId, stellarAddress },
+        "user_profile_lookup",
+      );
+
+      const profile = await getCurrentUserProfile(stellarAddress);
+
+      if (!profile) {
+        logger.debug(
+          { correlationId, reqId, stellarAddress },
+          "user_profile_not_found",
+        );
+        return next(
+          RouteErrorFactory.notFound("no user found with that stellar address"),
+        );
+      }
+
       logger.debug(
         { reqId, stellarAddress, predictionCount: profile.predictions?.length ?? 0 },
+      logger.info(
+        {
+          correlationId,
+          reqId,
+          stellarAddress,
+          predictionCount: profile.predictions.length,
+        },
         "user_profile_found",
       );
 
-      return res.json({ data: profile });
+      // Strong ETag on the profile payload; 304 if client already has it.
+      const responsePayload = { data: profile };
+      if (conditionalGet(responsePayload, req, res)) return;
+      return res.json(responsePayload);
     } catch (err) {
       // Delegate to the global error handler which logs and returns a
       // standardised 500 envelope (including requestId).

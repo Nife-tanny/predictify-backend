@@ -11,6 +11,7 @@ This service indexes on-chain market state from the Predictify Soroban contract,
 - **Node.js 20** + **TypeScript**
 - **Express** for HTTP
 - **Drizzle ORM** + **PostgreSQL** for persistence
+- **BullMQ** + **Redis** for async job queues (webhook delivery, backup verification, reconciliation, market resolution)
 - **zod** for env + request validation
 - **pino** for structured logging
 - **JWT (jsonwebtoken)** for wallet-based session auth
@@ -32,8 +33,76 @@ npm run dev                  # predev hook re-runs check-env automatically
 
 Once running:
 
-- **Swagger UI** → http://localhost:3000/docs *(non-production only; set `ENABLE_DOCS=true` to enable in production)*
-- **OpenAPI JSON** → http://localhost:3000/openapi.json *(always available)*
+- **Swagger UI** → http://localhost:3001/docs *(non-production only; set `ENABLE_DOCS=true` to enable in production)*
+- **OpenAPI JSON** → http://localhost:3001/openapi.json *(always available)*
+- **Audit export** → `GET /api/admin/audit/export` streams admin audit logs as `application/x-ndjson`
+- **Audit counts** → `GET /api/audit/counts` returns a per-action counts summary of audit log entries for admin dashboards
+
+
+## Health Endpoints
+
+| Endpoint | Auth | Description |
+|---|---|---|
+| `GET /health` | None | Liveness check — returns `{ "status": "ok" }` immediately. Use this to verify the process is up. |
+| `GET /healthz/dependencies` | None | Shallow dependency probe — Postgres, Soroban RPC, Horizon, webhook queue (Redis). Cached for 5 s. Returns 200/207/503. |
+| `GET /api/health/ready` | None | **Deep readiness check** — runs four parallel probes with 1-second timeouts each. Returns 200 when ready, 503 when unready. |
+| `GET /api/indexer/health` | None | Indexer health — probes external dependencies (Postgres + Soroban RPC) and compares the persisted cursor against the chain tip. Returns `"ok"` / `"degraded"` / `"down"` with dependency statuses in `dependencies` and lag data in `data`. Always HTTP 200. Supports [ETag / conditional GET](#etag--conditional-get-caching). |
+
+### `GET /api/health/ready` response
+
+```json
+{
+  "status": "ready",
+  "correlationId": "<uuid>",
+  "checkedAt": "2026-07-24T12:00:00.000Z",
+  "checks": {
+    "db":         { "status": "pass", "durationMs": 4,  "message": "Database connection healthy" },
+    "sorobanRpc": { "status": "pass", "durationMs": 18, "message": "Soroban RPC healthy" },
+    "indexerLag": { "status": "pass", "durationMs": 22, "message": "Indexer lag healthy: 12 ≤ 200 ledgers" },
+    "queue":      { "status": "pass", "durationMs": 2,  "message": "Queue (Redis) healthy" }
+  }
+}
+```
+
+- `status` is `"ready"` only when **all four** probes pass; otherwise `"unready"`.
+- HTTP 200 → ready, HTTP 503 → unready.
+- Pass `x-correlation-id` header to correlate log entries with the request.
+- `READINESS_MAX_LAG_LEDGERS` (env, default `200`) controls the indexer lag threshold.
+- Not cached — orchestrators (Kubernetes, ECS) get a fresh signal on every poll.
+
+See [docs/health-ready.md](docs/health-ready.md) for full runbook.
+
+## ETag / conditional GET caching
+
+Select read endpoints emit a strong `ETag` (SHA-256 of the response body) and honor
+`If-None-Match` with a `304 Not Modified` when the caller's cached copy is still
+current — this cuts bandwidth for clients that poll frequently. Implemented in
+[src/middleware/etag.ts](src/middleware/etag.ts) (`conditionalGet`).
+
+Currently applied to:
+
+- `GET /api/markets` / `GET /api/markets/:id`
+- `GET /api/users` / `GET /api/users/me` / `GET /api/users/:address/predictions` /
+  `GET /api/users/:stellarAddress/profile`
+- `GET /api/auth/*` (session-derived responses)
+- `GET /api/indexer/health` — cursor/chain-tip lag rarely changes between polls, so
+  monitoring/orchestrator probes that hit this endpoint on a tight interval get a
+  bodyless `304` instead of re-downloading the same status on every tick.
+
+Behavior:
+
+- Every `200` response includes `ETag` and `Cache-Control: no-cache` (clients may
+  cache, but must revalidate before reuse).
+- Send the previously-received `ETag` value back as `If-None-Match` to revalidate;
+  a match returns `304` with no body, a mismatch returns a fresh `200`.
+- Error responses (e.g. `404`) never carry an `ETag`.
+
+## Request body size limits
+
+- Default JSON request body limit: `256kb`.
+- Route-level overrides are applied in middleware using `createBodySizeLimitMiddleware(...)` from `src/middleware/bodySize.ts`.
+- Webhook routes may opt into a larger limit of `1mb`.
+- Requests exceeding the configured limit return HTTP `413` with the standard error envelope, including correlation and request IDs.
 
 ## Indexer gap scan
 
@@ -44,6 +113,20 @@ npm run indexer:gap-scan
 ```
 
 Configure via `INDEXER_GAP_SCAN_INTERVAL_MS`, `INDEXER_REWIND_LEDGERS`, and `INDEXER_BACKFILL_CHUNK_SIZE` in `.env`.
+
+## Job Queue (BullMQ + Redis)
+
+Slow and IO-bound jobs (webhook delivery, backup verification, market resolution, reconciliation) run in
+BullMQ workers backed by Redis. See **[docs/job-queue.md](docs/job-queue.md)** for the full design,
+enqueue patterns, environment variables, and testing guide.
+
+Quick start:
+
+```bash
+docker run -p 6379:6379 redis:7-alpine   # local Redis
+# Set REDIS_URL=redis://localhost:6379 in .env
+npm run dev
+```
 
 ## Layout
 
@@ -64,6 +147,15 @@ scripts/       dev helpers (check-drizzle-drift.ts)
   workflows/   CI pipeline (lint, test, drift check, migrate)
 ```
 
+## Global Leaderboard
+
+A platform-wide leaderboard aggregated across **all markets and all time** is available at:
+
+- **`GET /api/leaderboard/global`** — paginated global rankings (`limit`, `offset`, `refresh` params)
+- **`GET /api/leaderboard/global/user/:stellarAddress`** — single-user global entry
+
+Results are cached in Redis for 5 minutes. Passing `refresh=true` forces an immediate `REFRESH MATERIALIZED VIEW CONCURRENTLY`. See [docs/global-leaderboard.md](docs/global-leaderboard.md) for full documentation.
+
 ## Roadmap
 
 This starter is intentionally minimal. The full backlog is tracked in GitHub Issues under the **OFFICIAL CAMPAIGN** label. Major themes:
@@ -74,7 +166,7 @@ This starter is intentionally minimal. The full backlog is tracked in GitHub Iss
 - Predictions + claims endpoints
 - Leaderboards & user profiles
 - Webhook delivery + DLQ
-- Observability (metrics, tracing, /readyz with deep checks)
+- Observability (metrics, tracing, /readyz with deep checks ✅ `/api/health/ready`)
 - OpenAPI spec + contract tests
 
 ## Auth Refresh Flow
@@ -84,13 +176,98 @@ This starter is intentionally minimal. The full backlog is tracked in GitHub Iss
 - If a revoked refresh token is presented again, the service treats it as suspected theft and revokes every still-active token in the same `familyId`.
 - `POST /api/auth/logout` accepts the same body and revokes the remaining active tokens in that refresh-token family.
 
-## Refresh Token Tests
+## Testing
+
+### Unit Tests
+
+Run the unit test suite:
+
+```bash
+npm test              # Run all tests
+npm run test:unit     # Run unit tests only (excludes E2E)
+npm run test:coverage # Run with coverage report
+```
+
+### E2E Tests
+
+End-to-end tests validate the complete prediction lifecycle on Stellar testnet:
+
+```bash
+npm run test:e2e           # Run E2E tests
+npm run test:e2e:coverage  # Run E2E tests with coverage
+```
+
+**E2E tests validate:**
+- User authentication with wallet signatures
+- Market creation on testnet
+- Placing predictions
+- Market resolution
+- Claiming winnings
+- Data consistency across the lifecycle
+
+**Setup required:**
+- Funded Stellar testnet account
+- Deployed Predictify contract on testnet
+- Test database (separate from dev/prod)
+
+See [tests/e2e/README.md](tests/e2e/README.md) and [docs/e2e-testing.md](docs/e2e-testing.md) for detailed setup and usage.
+
+**CI/CD:**
+- E2E tests run nightly at 2 AM UTC
+- Manual trigger via GitHub Actions
+- Automatic issue creation on failure
+
+### Refresh Token Tests
 
 ```bash
 npm test -- tests/refreshToken.test.ts
 ```
 
 The refresh-token test suite covers rotation, expiry handling, reuse detection, logout family revocation, and hash-only storage.
+
+## Social graph
+
+Follow graph mutations are exposed at:
+
+- `POST /api/users/:addr/follow`
+- `DELETE /api/users/:addr/follow`
+
+These endpoints require authentication, enforce `users.is_private`, update
+cached `followers_count` and `following_count` values transactionally, and
+write structured audit entries with the request correlation ID.
+
+## Run with Docker
+
+You can spin up the entire Predictify stack (API, Indexer, and PostgreSQL) using Docker Compose.
+
+### Prerequisites
+- [Docker](https://docs.docker.com/get-docker/) installed and running.
+- A local `.env` file generated from `.env.example`. Ensure `DATABASE_URL` is set to `postgres://postgres:postgres@db:5432/predictify` for Docker compatibility.
+
+### Commands
+
+1. **Start the stack:**
+   ```bash
+   docker compose up --build
+   ```
+   
+2. Verify the services:
+   Once booted, the API will be available at http://localhost:3001.
+   Check the health endpoint:
+   ```bash
+   curl localhost:3001/health
+   # Expected response: 200 OK
+   ```
+### Notes
+* The migrate service runs automatically on startup to ensure the database schema is up-to-date before the API and Indexer start.
+
+* The indexer service runs as a persistent container; check the logs with docker compose logs -f indexer if you encounter sync issues.
+
+### Implementation Notes for Review
+*   **Performance:** Multi-stage builds reduce the final image size by excluding source code and dev dependencies.
+*   **Security:** By using `USER node` and `slim` base images, we reduce the attack surface.
+*   **Resilience:** The `depends_on` condition using `service_healthy` or `service_completed_successfully` ensures the database is ready and migrations are applied before application services boot, preventing race conditions.
+*   **Supply-Chain:** The base image is pinned by a specific digest. **Important:** When you run this, verify the digest matches your local build requirements, or update it to the latest `node:20-bookworm-slim` digest if you prefer the absolute latest patch version.
 
 ## License
 

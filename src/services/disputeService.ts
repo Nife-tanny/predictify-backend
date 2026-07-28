@@ -2,6 +2,7 @@ import { and, eq } from "drizzle-orm";
 import { db } from "../db/client";
 import { disputes, markets, predictions } from "../db/schema";
 import { emitWebhook } from "./webhookService";
+import { emitMarketEvent, LogEvent } from "../logging/events";
 
 export interface OpenDisputeInput {
   marketId: string;
@@ -73,6 +74,15 @@ export async function openDispute(input: OpenDisputeInput): Promise<DisputeRow> 
   await db.update(markets)
     .set({ status: "disputed" })
     .where(eq(markets.id, marketId));
+
+  // Structured market log event - service layer, correlation ID included
+  emitMarketEvent(LogEvent.MARKET_DISPUTED, {
+    marketId,
+    disputeId: dispute.id,
+    actor: userId,
+    reason,
+    evidenceUri: evidenceUri ?? null,
+  });
 
   await emitWebhook({
     type: "dispute.opened",

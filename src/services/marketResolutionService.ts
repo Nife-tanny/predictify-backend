@@ -3,6 +3,7 @@ import { eq, sql } from "drizzle-orm";
 import type { Db } from "../db";
 import { markets, predictions, webhookSubscriptions } from "../db/schema";
 import { logger } from "../config/logger";
+import { emitMarketEvent, LogEvent } from "../logging/events";
 
 // ─── Public types ──────────────────────────────────────────────────────────
 
@@ -79,6 +80,15 @@ export async function resolveMarket(
     logger.info({ marketId }, "market_resolver: skipped — already resolved or market not found");
     return { processed: false };
   }
+
+  // Structured audit event – emitted from service layer with correlation ID
+  emitMarketEvent(LogEvent.MARKET_RESOLVED, {
+    marketId,
+    winningOutcome,
+    ledger: event.ledger,
+    timestamp: event.timestamp,
+    actor: "indexer",
+  });
 
   logger.info({ marketId, winningOutcome }, "market_resolver: resolved, fanning out webhooks");
 

@@ -29,3 +29,31 @@ export class AppError extends Error {
     return new AppError(ErrorCodes.VALIDATION_ERROR, "Validation failed", 400, details);
   }
 }
+
+export class NotFoundError extends AppError {
+  constructor(message = "Resource not found") {
+    super(ErrorCodes.NOT_FOUND, message, 404);
+    this.name = "NotFoundError";
+  }
+}
+
+export class MarketClosedError extends AppError {
+  constructor() {
+    super(ErrorCodes.MARKET_CLOSED, "Market is not active or has passed resolution time", 409);
+    this.name = "MarketClosedError";
+  }
+}
+
+export class ValidationError extends AppError {
+  constructor(message: string) {
+    super(ErrorCodes.VALIDATION_ERROR, message, 400);
+    this.name = "ValidationError";
+  }
+}
+
+export class UnauthorizedError extends AppError {
+  constructor(message = "Authentication required") {
+    super(ErrorCodes.UNAUTHORIZED, message, 401);
+    this.name = "UnauthorizedError";
+  }
+}
