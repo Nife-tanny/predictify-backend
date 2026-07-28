@@ -3,6 +3,7 @@ import {
   extendZodWithOpenApi,
   OpenAPIRegistry,
 } from "@asteasolutions/zod-to-openapi";
+import { recommendationsQuerySchema } from "../validators/markets";
 
 extendZodWithOpenApi(z);
 
@@ -499,12 +500,15 @@ registry.registerPath({
   tags: ["Markets"],
   summary: "Get personalized market recommendations",
   security: [{ bearerAuth: [] }],
+  request: {
+    query: recommendationsQuerySchema,
+  },
   responses: {
     200: {
-      description: "Array of recommended markets",
+      description: "Paginated list of recommended markets",
       content: {
         "application/json": {
-          schema: z.object({ data: z.array(Market) }),
+          schema: z.object({ data: z.array(Market), nextCursor: z.string().nullable() }),
           examples: {
             recommendedMarkets: {
               value: {
@@ -521,6 +525,7 @@ registry.registerPath({
                     createdAt: "2026-03-01T09:00:00.000Z",
                   },
                 ],
+                nextCursor: null,
               },
             },
           },
@@ -542,6 +547,36 @@ registry.registerPath({
               },
             },
           },
+        },
+      },
+    },
+  },
+});
+
+registry.registerPath({
+  method: "get",
+  path: "/api/recommendations",
+  operationId: "getRecommendations",
+  tags: ["Markets"],
+  summary: "Get personalized market recommendations",
+  security: [{ bearerAuth: [] }],
+  request: {
+    query: recommendationsQuerySchema,
+  },
+  responses: {
+    200: {
+      description: "Paginated list of recommended markets",
+      content: {
+        "application/json": {
+          schema: z.object({ data: z.array(Market), nextCursor: z.string().nullable() }),
+        },
+      },
+    },
+    401: {
+      description: "Unauthorized",
+      content: {
+        "application/json": {
+          schema: ErrorBody,
         },
       },
     },

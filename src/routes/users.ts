@@ -446,8 +446,6 @@ usersRouter.get(
         );
       }
 
-      logger.debug(
-        { reqId, stellarAddress, predictionCount: profile.predictions?.length ?? 0 },
       logger.info(
         {
           correlationId,

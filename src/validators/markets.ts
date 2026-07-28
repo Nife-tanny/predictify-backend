@@ -188,3 +188,26 @@ export const marketWatchersQuerySchema = z.object({
 
 export type MarketWatchersQuery = z.infer<typeof marketWatchersQuerySchema>;
 
+/**
+ * Schema for GET /api/markets/recommendations query parameters.
+ *
+ * Unknown query parameters are rejected via `.strict()`.
+ */
+export const recommendationsQuerySchema = z
+  .object({
+    limit: z.coerce
+      .number({ invalid_type_error: "limit must be a number" })
+      .int("Limit must be an integer")
+      .min(1, "Limit must be between 1 and 100")
+      .max(100, "Limit must be between 1 and 100")
+      .default(20),
+    cursor: z
+      .string({ invalid_type_error: "cursor must be a string" })
+      .max(512, "cursor is too long")
+      .optional(),
+  })
+  .strict();
+
+export type RecommendationsQuery = z.infer<typeof recommendationsQuerySchema>;
+
+

@@ -32,6 +32,10 @@ import {
   patchMarketBodySchema,
 } from "../../validators/markets";
 
+function trackMarketsMetrics(_action: string) {
+  return (_req: any, _res: any, next: any) => next();
+}
+
 export const marketsRouter = Router();
 
 // Enforce CORS allowlist early so unapproved origins are rejected

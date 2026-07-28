@@ -17,7 +17,8 @@ import { Router } from "express";
 import { logger } from "../../config/logger";
 import { NotFoundError } from "../../errors";
 import { getRequestId } from "../../lib/requestContext";
-import { AuthenticatedRequest, requireAuth } from "../../middleware/auth";
+import { AuthenticatedRequest } from "../../middleware/auth";
+import { requireAuth } from "../../middleware/requireAuth";
 import {
   listMarketWatchers,
   addMarketWatcher,
