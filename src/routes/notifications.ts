@@ -13,6 +13,7 @@ import {
 } from "../services/notificationPrefs";
 import { markNotificationsAsRead } from "../services/notificationService";
 import { idempotency } from "../middleware/idempotency";
+import { RouteErrorFactory } from "../errors";
 import { notificationsCors } from "../middleware/cors";
 import { notificationsMetricsMiddleware } from "../metrics/notificationsMetrics";
 
@@ -98,7 +99,7 @@ notificationsRouter.patch(
         },
         "notification_preferences_validation_failed",
       );
-      throw RouteErrorFactory.validation("Invalid request body");
+      return next(RouteErrorFactory.validation("Invalid request body"));
     }
 
     try {
