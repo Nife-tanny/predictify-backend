@@ -26,6 +26,15 @@ export class VersionConflictError extends Error {
   }
 }
 
+export class MarketAlreadyExistsError extends Error {
+  status = 409;
+  code = "market_exists";
+  constructor(marketId: string) {
+    super(`Market with ID "${marketId}" already exists`);
+    Object.setPrototypeOf(this, MarketAlreadyExistsError.prototype);
+  }
+}
+
 /** Statuses that represent a market that has not yet opened for predictions. */
 export const UPCOMING_MARKET_STATUSES = ["upcoming", "pending", "scheduled"] as const;
 
@@ -411,4 +420,105 @@ export async function updateMarket(
   });
 
   return result;
+}
+
+/**
+ * Creates a new off-chain market shell with canonical question, metadata, and resolution time.
+ *
+ * Markets are keyed by the on-chain ID supplied by the contract deployer.
+ * On creation, the market is assigned indexedLedger=0 and archived=false.
+ *
+ * @param params.id - Market ID (unique, supplied by contract deployer)
+ * @param params.question - Canonical market question (max 512 chars)
+ * @param params.resolutionTime - Market resolution time (ISO 8601 string)
+ * @param params.metadata - Optional market metadata (max 64KB serialized)
+ * @param params.adminAddress - Stellar address of the admin creating the market
+ * @returns Created market object with indexedLedger=0, archived=false, version=1
+ * @throws MarketAlreadyExistsError if market with id already exists (409)
+ * @throws Error if database query fails
+ */
+export async function createMarket(params: {
+  id: string;
+  question: string;
+  resolutionTime: string;
+  metadata?: Record<string, unknown>;
+  adminAddress?: string;
+}): Promise<any> {
+  const { id, question, resolutionTime, metadata, adminAddress } = params;
+
+  if (!id || typeof id !== "string") {
+    throw new Error("Market ID must be a non-empty string");
+  }
+
+  if (!question || typeof question !== "string") {
+    throw new Error("Question must be a non-empty string");
+  }
+
+  if (!resolutionTime || typeof resolutionTime !== "string") {
+    throw new Error("Resolution time must be a non-empty ISO 8601 string");
+  }
+
+  const created = await db.transaction(async (tx) => {
+    // Check if market already exists
+    const existing = await tx
+      .select()
+      .from(markets)
+      .where(eq(markets.id, id))
+      .limit(1);
+
+    if (existing.length > 0) {
+      throw new MarketAlreadyExistsError(id);
+    }
+
+    // Insert the new market
+    const resolutionDate = new Date(resolutionTime);
+    const result = await tx
+      .insert(markets)
+      .values({
+        id,
+        question,
+        resolutionTime: resolutionDate,
+        metadata: metadata || null,
+        status: "upcoming",
+        indexedLedger: 0,
+        archived: false,
+        version: 1,
+      })
+      .returning();
+
+    if (!result[0]) {
+      throw new Error("Failed to create market");
+    }
+
+    // Audit log if admin address is provided
+    if (adminAddress) {
+      await tx.insert(marketAuditLog).values({
+        marketId: id,
+        adminAddress,
+        action: "create",
+        beforeState: null,
+        afterState: {
+          id,
+          question,
+          resolutionTime: resolutionDate.toISOString(),
+          metadata: metadata || null,
+          status: "upcoming",
+          indexedLedger: 0,
+          archived: false,
+          version: 1,
+        },
+      });
+    }
+
+    return result[0];
+  });
+
+  // Structured log event – emitted from service layer after successful commit.
+  emitMarketEvent(LogEvent.MARKET_CREATED, {
+    marketId: id,
+    actor: adminAddress ?? "system",
+    version: 1,
+  });
+
+  return created;
 }

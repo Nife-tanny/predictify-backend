@@ -179,6 +179,41 @@ export const patchMarketBodySchema = z
 export type PatchMarketBody = z.infer<typeof patchMarketBodySchema>;
 
 /**
+ * Schema for POST /api/markets body payload (admin only).
+ *
+ * Creates an off-chain market shell with canonical question, metadata, and resolution time.
+ * Keyed by on-chain ID supplied by the contract deployer.
+ *
+ * Uses `.strict()` to reject unexpected fields.
+ */
+export const createMarketBodySchema = z
+  .object({
+    id: z
+      .string({ invalid_type_error: "id must be a string" })
+      .trim()
+      .min(1, "Market ID cannot be empty")
+      .max(255, "Market ID must be at most 255 characters"),
+    question: z
+      .string({ invalid_type_error: "question must be a string" })
+      .trim()
+      .min(1, "Question cannot be empty")
+      .max(512, "Question must be at most 512 characters"),
+    resolutionTime: z
+      .string({ invalid_type_error: "resolutionTime must be an ISO 8601 string" })
+      .datetime({ message: "resolutionTime must be a valid ISO 8601 datetime" }),
+    metadata: z
+      .record(z.unknown())
+      .optional()
+      .refine(
+        (val) => !val || JSON.stringify(val).length <= 65536,
+        "Metadata payload must not exceed 64KB when serialized",
+      ),
+  })
+  .strict();
+
+export type CreateMarketBody = z.infer<typeof createMarketBodySchema>;
+
+/**
  * Schema for GET /api/markets/:id/watchers query parameters
  */
 export const marketWatchersQuerySchema = z.object({
