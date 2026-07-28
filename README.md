@@ -147,6 +147,14 @@ scripts/       dev helpers (check-drizzle-drift.ts)
   workflows/   CI pipeline (lint, test, drift check, migrate)
 ```
 
+## Feature Flags
+
+The public feature-flags endpoint returns the current flag state for client consumption:
+
+- **`GET /api/feature-flags`** — returns `{ data: { FLAG: { enabled, metadata? }, ... }, correlationId }`. Optional query params: `environment` and `clientVersion`.
+
+A **5-second per-request timeout** is enforced. Requests that exceed it receive `HTTP 504` with `{ error: { code: "gateway_timeout", ... } }`. The handler uses cooperative cancellation via `AbortSignal` so in-flight work is abandoned cleanly. See [docs/feature-flags.md](docs/feature-flags.md) for the full runbook.
+
 ## Global Leaderboard
 
 A platform-wide leaderboard aggregated across **all markets and all time** is available at:
