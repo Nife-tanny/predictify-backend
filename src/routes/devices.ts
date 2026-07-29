@@ -5,6 +5,7 @@ import { refreshTokens } from "../db/schema";
 import { requireAuth } from "../middleware/requireAuth";
 import { AuthenticatedRequest } from "../middleware/auth";
 import { logger } from "../config/logger";
+import { listDevicesQuerySchema } from "../validators/devices";
 
 export interface DeviceSummary {
   id: string;
@@ -20,6 +21,11 @@ devicesRouter.get(
   "/",
   async (req: AuthenticatedRequest, res, next) => {
     try {
+      const parsed = listDevicesQuerySchema.safeParse(req.query);
+      if (!parsed.success) {
+        throw parsed.error;
+      }
+
       const userId = req.user!.id;
 
       const rows = await db
