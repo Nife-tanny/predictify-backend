@@ -29,7 +29,8 @@
  *   import { securityHeaders } from "../middleware/securityHeaders";
  *
  *   // Mount first, before auth/business-logic middleware, so the headers
- *   // are present on every response from this router — including 401/403s.
+ *   // are present on every response from this router — including 401/403s
+ *   // and indexer responses (/api/indexer).
  *   someRouter.use(securityHeaders);
  */
 

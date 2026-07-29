@@ -30,6 +30,7 @@ import { userStatsRouter } from "./routes/users/stats";
 import { devicesRouter } from "./routes/devices";
 import { featureFlagsRouter } from "./routes/feature-flags";
 import { adminFeatureFlagsRouter } from "./routes/admin/featureFlags";
+import { featureFlagsRouter } from "./routes/feature-flags";
 import { adminUsersRouter } from "./routes/adminUsers";
 import { adminNotesRouter } from "./routes/admin/users/notes";
 import { leaderboardRouter } from "./routes/leaderboard";
@@ -52,8 +53,9 @@ import { REQUEST_ID_HEADER } from "./lib/http";
 import { register } from "./metrics/registry";
 import { connectWithRetry, closeDb, db } from "./db/client";
 import { stopScheduler } from "./services/scheduler";
-import { startIndexerHealthProbe } from "./jobs/indexerHealthProbe";
+import { startIndexerHealthProbe, stopIndexerHealthProbe } from "./jobs/indexerHealthProbe";
 import { indexerHealthRouter } from "./routes/indexer/health";
+import { indexerCursorRouter } from "./routes/indexer/cursor";
 import { WebhookWorker } from "./workers/webhookWorker";
 import { marketResolverWorker } from "./workers/marketResolver";
 import { backupVerificationWorker } from "./workers/backupVerificationWorker";
@@ -63,7 +65,8 @@ import { adminRateLimitInspectRouter } from "./routes/admin/rate-limit/inspect";
 import { quotaRequestsRouter } from "./routes/quota/requests";
 import { startSlowQueryAlerter } from "./workers/slowQueryAlerter";
 import { reportsRouter } from "./routes/reports";
-import { exportsRouter } from "./routes/exports";
+import { fingerprintRouter } from "./routes/fingerprint";
+import { alertsRouter } from "./routes/alerts";
 import { gracefulShutdown } from "./lifecycle/shutdown";
 
 
@@ -151,6 +154,7 @@ export function createApp(_options: CreateAppOptions = {}): express.Express {
   app.use("/api/health/dependencies", dependenciesRouter);
   app.use("/api/health/version", versionRouter);
   app.use("/api/indexer", indexerHealthRouter);
+  app.use("/api/indexer/cursor", indexerCursorRouter);
 
   const mutationMethods = ["POST", "PATCH"] as const;
   app.use("/api", (req, res, next) =>
@@ -170,6 +174,7 @@ export function createApp(_options: CreateAppOptions = {}): express.Express {
   app.use("/api/leaderboard", leaderboardRouter);
   app.use("/api/leaderboard/global", globalLeaderboardRouter);
   app.use("/api/rate-limit", rateLimitRouter);
+  app.use("/api/search", searchRouter);
   app.use("/api/quota/requests", quotaRequestsRouter);
   app.use("/api/notifications", notificationsRouter);
   app.use("/api/webhooks", webhooksRouter);
@@ -190,12 +195,13 @@ export function createApp(_options: CreateAppOptions = {}): express.Express {
   app.use("/api/admin/users", adminNotesRouter);
   app.use("/api/feature-flags", featureFlagsRouter);
   app.use("/api/admin/feature-flags", adminFeatureFlagsRouter);
+  app.use("/api/feature-flags", featureFlagsRouter);
   app.use("/api/admin/markets", adminMarketsRouter);
   app.use("/api/admin/schema-versions", adminSchemaVersionsRouter);
   app.use("/api/admin/rate-limit", adminRateLimitInspectRouter);
   app.use("/api/reports", reportsRouter);
-  app.use("/api/exports", exportsRouter);
-
+  app.use("/api/fingerprint", fingerprintRouter);
+  app.use("/api/alerts", alertsRouter);
 
 
   app.get("/metrics", async (req, res) => {
@@ -238,33 +244,34 @@ if (require.main === module) {
         logger.info(`Swagger UI available at http://localhost:${env.PORT}/docs`);
       });
 
-      process.on("SIGTERM", async () => {
-        logger.info("SIGTERM received, shutting down");
+      const handleShutdown = async (signal: string) => {
+        logger.info({ signal }, "shutdown_signal_received");
+        setAuthDraining(true);
+
         const forceExit = setTimeout(() => {
           logger.warn("Forced exit after shutdown timeout");
           process.exit(1);
-        }, 5000).unref();
+        }, 10000).unref();
 
-        // Workers handled by gracefulShutdown
-        stopScheduler();
-        await closeDb();
-        clearTimeout(forceExit);
-        process.exit(0);
-      });
+        try {
+          logger.info("Draining in-flight /api/auth requests...");
+          await waitForAuthDrain(5000);
+          logger.info("In-flight /api/auth requests drained successfully");
 
-      process.on("SIGINT", async () => {
-        logger.info("SIGINT received, shutting down gracefully");
-        const forceExit = setTimeout(() => {
-          logger.warn("Forced exit after shutdown timeout");
+          stopScheduler();
+          await closeDb();
+          clearTimeout(forceExit);
+          logger.info("Shutdown completed successfully");
+          process.exit(0);
+        } catch (err) {
+          logger.error({ err }, "Error during shutdown");
+          clearTimeout(forceExit);
           process.exit(1);
-        }, 5000).unref();
+        }
+      };
 
-        // Workers handled by gracefulShutdown
-        stopScheduler();
-        await closeDb();
-        clearTimeout(forceExit);
-        process.exit(0);
-      });
+      process.on("SIGTERM", () => handleShutdown("SIGTERM"));
+      process.on("SIGINT", () => handleShutdown("SIGINT"));
     })
     .catch((err) => {
       logger.fatal({ err }, "Failed to start server");
