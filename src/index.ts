@@ -53,8 +53,9 @@ import { REQUEST_ID_HEADER } from "./lib/http";
 import { register } from "./metrics/registry";
 import { connectWithRetry, closeDb, db } from "./db/client";
 import { stopScheduler } from "./services/scheduler";
-import { startIndexerHealthProbe } from "./jobs/indexerHealthProbe";
-import { indexerRouter } from "./routes/indexer";
+import { startIndexerHealthProbe, stopIndexerHealthProbe } from "./jobs/indexerHealthProbe";
+import { indexerHealthRouter } from "./routes/indexer/health";
+import { indexerCursorRouter } from "./routes/indexer/cursor";
 import { WebhookWorker } from "./workers/webhookWorker";
 import { marketResolverWorker } from "./workers/marketResolver";
 import { backupVerificationWorker } from "./workers/backupVerificationWorker";
@@ -152,7 +153,8 @@ export function createApp(_options: CreateAppOptions = {}): express.Express {
   app.use("/api/health/ready", createReadyRouter({ db, redis: redisConnection }));
   app.use("/api/health/dependencies", dependenciesRouter);
   app.use("/api/health/version", versionRouter);
-  app.use("/api/indexer", indexerRouter);
+  app.use("/api/indexer", indexerHealthRouter);
+  app.use("/api/indexer/cursor", indexerCursorRouter);
 
   const mutationMethods = ["POST", "PATCH"] as const;
   app.use("/api", (req, res, next) =>
@@ -242,33 +244,34 @@ if (require.main === module) {
         logger.info(`Swagger UI available at http://localhost:${env.PORT}/docs`);
       });
 
-      process.on("SIGTERM", async () => {
-        logger.info("SIGTERM received, shutting down");
+      const handleShutdown = async (signal: string) => {
+        logger.info({ signal }, "shutdown_signal_received");
+        setAuthDraining(true);
+
         const forceExit = setTimeout(() => {
           logger.warn("Forced exit after shutdown timeout");
           process.exit(1);
-        }, 5000).unref();
+        }, 10000).unref();
 
-        // Workers handled by gracefulShutdown
-        stopScheduler();
-        await closeDb();
-        clearTimeout(forceExit);
-        process.exit(0);
-      });
+        try {
+          logger.info("Draining in-flight /api/auth requests...");
+          await waitForAuthDrain(5000);
+          logger.info("In-flight /api/auth requests drained successfully");
 
-      process.on("SIGINT", async () => {
-        logger.info("SIGINT received, shutting down gracefully");
-        const forceExit = setTimeout(() => {
-          logger.warn("Forced exit after shutdown timeout");
+          stopScheduler();
+          await closeDb();
+          clearTimeout(forceExit);
+          logger.info("Shutdown completed successfully");
+          process.exit(0);
+        } catch (err) {
+          logger.error({ err }, "Error during shutdown");
+          clearTimeout(forceExit);
           process.exit(1);
-        }, 5000).unref();
+        }
+      };
 
-        // Workers handled by gracefulShutdown
-        stopScheduler();
-        await closeDb();
-        clearTimeout(forceExit);
-        process.exit(0);
-      });
+      process.on("SIGTERM", () => handleShutdown("SIGTERM"));
+      process.on("SIGINT", () => handleShutdown("SIGINT"));
     })
     .catch((err) => {
       logger.fatal({ err }, "Failed to start server");
