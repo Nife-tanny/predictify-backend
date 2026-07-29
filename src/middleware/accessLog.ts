@@ -23,8 +23,9 @@
  * The log name is selected by route prefix so consumers can filter access logs
  * more easily: `/api/users` => `users_access_log`, `/api/auth` =>
  * `auth_access_log`, `/api/predictions` => `predictions_access_log`,
- * `/api/markets` => `markets_access_log`, and `/api/tags` =>
- * `tags_access_log`.
+ * `/api/markets` => `markets_access_log`, `/api/tags` =>
+ * `tags_access_log`, `/api/feature-flags` => `feature_flags_access_log`,
+ * and `/api/referrals` => `referrals_access_log`.
  *
  * Usage
  * -----
@@ -98,7 +99,7 @@ function resolveIp(req: Request): string {
  *
  * Stamps `res.locals.correlationId` and hooks `res.on("finish")` to emit
  * a `users_access_log`, `auth_access_log`, `predictions_access_log`,
- * `markets_access_log`, or `tags_access_log` log entry once the response
+ * `markets_access_log`, `tags_access_log`, or `referrals_access_log` log entry once the response
  * has been flushed.
  * Always calls `next()` so it is safe to mount as the first middleware on
  * any router without affecting the handler chain.
@@ -129,8 +130,10 @@ export function accessLog(req: Request, res: Response, next: NextFunction): void
       logName = "markets_access_log";
     } else if (req.originalUrl.startsWith("/api/feature-flags")) {
       logName = "feature_flags_access_log";
-    } else if (req.originalUrl.startsWith("/api/webhooks")) {
-      logName = "webhooks_access_log";
+    } else if (req.originalUrl.startsWith("/api/tags")) {
+      logName = "tags_access_log";
+    } else if (req.originalUrl.startsWith("/api/referrals")) {
+      logName = "referrals_access_log";
     }
 
     const durationMs = Date.now() - startMs;
