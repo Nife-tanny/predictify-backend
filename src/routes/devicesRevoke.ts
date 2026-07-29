@@ -1,14 +1,12 @@
 import { Router } from "express";
 import { and, eq, isNull } from "drizzle-orm";
-import { z } from "zod";
 import { db } from "../db";
 import { refreshTokens } from "../db/schema";
 import { requireAuth } from "../middleware/requireAuth";
 import { AuthenticatedRequest } from "../middleware/auth";
 import { logger } from "../config/logger";
 import { RouteErrorFactory } from "../errors";
-
-const paramsSchema = z.object({ id: z.string().uuid({ message: "invalid device id" }) });
+import { deviceIdParamSchema } from "../validators/devices";
 
 export const devicesRevokeRouter = Router({ mergeParams: true });
 
@@ -18,9 +16,9 @@ devicesRevokeRouter.post(
   "/",
   async (req: AuthenticatedRequest, res, next) => {
     try {
-      const parsed = paramsSchema.safeParse(req.params);
+      const parsed = deviceIdParamSchema.safeParse(req.params);
       if (!parsed.success) {
-        throw RouteErrorFactory.validation(parsed.error.issues[0]?.message ?? "invalid device id");
+        throw parsed.error;
       }
 
       const userId = req.user!.id;
