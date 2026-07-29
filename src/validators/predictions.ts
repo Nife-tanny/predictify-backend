@@ -37,3 +37,14 @@ export const listPredictionsQuerySchema = z
   .strict();
 
 export type ListPredictionsQuery = z.infer<typeof listPredictionsQuerySchema>;
+
+/**
+ * Schema for route parameters requiring a prediction ID.
+ */
+export const predictionIdParamSchema = z
+  .object({
+    id: z.string().uuid("id must be a valid UUID"),
+  })
+  .strict();
+
+export type PredictionIdParam = z.infer<typeof predictionIdParamSchema>;

@@ -156,6 +156,11 @@ export const predictions = pgTable("predictions", {
   fundingSource: text("funding_source"),
   status: text("status").notNull().default("pending"),
   result: text("result"),
+  /** Soroban claim transaction hash — populated after the user claims their winnings. */
+  claimTxHash: text("claim_tx_hash"),
+  /** Timestamp when the claim transaction was submitted. Null until claimed. */
+  claimedAt: timestamp("claimed_at", { withTimezone: true }),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   createdAt: timestamp("created_at", { withTimezone: true })
     .notNull()
     .defaultNow(),
@@ -253,6 +258,25 @@ export const adminAuditLog = pgTable("admin_audit_log", {
     .defaultNow(),
 });
 
+export const marketComments = pgTable("market_comments", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  marketId: text("market_id").notNull().references(() => markets.id, {
+    onDelete: "cascade",
+  }),
+
+  authorId: uuid("author_id").references(() => users.id, {
+    onDelete: "set null",
+  }),
+  authorAddress: text("author_address"),
+
+  body: text("body").notNull(),
+
+  moderationFlagged: boolean("moderation_flagged").notNull().default(false),
+  moderationReason: text("moderation_reason"),
+
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+});
+
 export const indexerCursor = pgTable("indexer_cursor", {
   id: integer("id").primaryKey(),
   lastLedger: integer("last_ledger").notNull(),
@@ -261,6 +285,11 @@ export const indexerCursor = pgTable("indexer_cursor", {
     .defaultNow(),
 });
 
+
+/**
+ * Stores idempotency keys for POST/PATCH mutation replay.
+ * Rows are purged after 24 h by the sweeper job.
+ */
 export const contractEvents = pgTable("contract_events", {
   id: uuid("id").primaryKey().defaultRandom(),
   contractId: text("contract_id").notNull(),
@@ -362,6 +391,10 @@ export const auditLogs = pgTable(
     ip: text("ip").notNull(),
     correlationId: text("correlation_id").notNull(),
     rateLimitContext: jsonb("rate_limit_context"),
+    /** Snapshot of the relevant state immediately before the mutating action. */
+    beforeState: jsonb("before_state"),
+    /** Snapshot of the relevant state immediately after the mutating action. */
+    afterState: jsonb("after_state"),
     createdAt: timestamp("created_at", { withTimezone: true })
       .notNull()
       .defaultNow(),
@@ -536,3 +569,37 @@ export const scheduledReports = pgTable(
 
 export type ScheduledReport = typeof scheduledReports.$inferSelect;
 export type NewScheduledReport = typeof scheduledReports.$inferInsert;
+
+// ---------------------------------------------------------------------------
+// Market Watchers
+// ---------------------------------------------------------------------------
+/**
+ * market_watchers — tracks users watching/subscribed to a market.
+ */
+export const marketWatchers = pgTable(
+  "market_watchers",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    marketId: text("market_id")
+      .notNull()
+      .references(() => markets.id, { onDelete: "cascade" }),
+    userId: uuid("user_id")
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+  },
+  (t) => ({
+    marketWatchersMarketIdIdx: index("market_watchers_market_id_idx").on(t.marketId),
+    marketWatchersUserIdIdx: index("market_watchers_user_id_idx").on(t.userId),
+    marketWatchersMarketUserIdx: index("market_watchers_market_user_idx").on(
+      t.marketId,
+      t.userId,
+    ),
+  }),
+);
+
+export type MarketWatcher = typeof marketWatchers.$inferSelect;
+export type NewMarketWatcher = typeof marketWatchers.$inferInsert;
+

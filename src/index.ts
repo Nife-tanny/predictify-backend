@@ -5,52 +5,70 @@ import { v4 as uuidv4 } from "uuid";
 import { env } from "./config/env";
 import { logger } from "./config/logger";
 import { metricsMiddleware } from "./metrics/httpMetrics";
+import { metricsHistogramMiddleware } from "./middleware/metricsHistogram";
+import { correlationMiddleware } from "./middleware/correlation";
+import { fingerprintMiddleware } from "./middleware/fingerprint";
 import { idempotency } from "./middleware/idempotency";
 import { defaultBodySizeLimitMiddleware, webhookBodySizeLimitMiddleware } from "./middleware/bodySize";
 import { healthRouter } from "./routes/health";
-import dependenciesRouter from "./routes/healthz/dependencies";
+import healthzDependenciesRouter from "./routes/healthz/dependencies";
 import { createReadyRouter } from "./routes/health/ready";
 import { dependenciesRouter } from "./routes/health/dependencies";
+import { versionRouter } from "./routes/health/version";
 import { redisConnection } from "./queue";
 import { authRouter } from "./routes/auth";
+import { recommendationsRouter } from "./routes/recommendations";
+import { tagsRouter } from "./routes/tags";
+import { auditRouter } from "./routes/audit";
 import { marketsRouter } from "./routes/markets";
-import { predictionsRouter } from "./routes/predictions";
+import { commentsRouter } from "./routes/comments";
 import { usersRouter } from "./routes/users";
+import { predictionsRouter } from "./routes/predictions";
 import { usersHealthRouter } from "./routes/users/health";
 import { userPortfolioRouter } from "./routes/users/portfolio";
+import { userStatsRouter } from "./routes/users/stats";
 import { devicesRouter } from "./routes/devices";
+import { featureFlagsRouter } from "./routes/feature-flags";
 import { adminFeatureFlagsRouter } from "./routes/admin/featureFlags";
+import { featureFlagsRouter } from "./routes/feature-flags";
 import { adminUsersRouter } from "./routes/adminUsers";
 import { adminNotesRouter } from "./routes/admin/users/notes";
 import { leaderboardRouter } from "./routes/leaderboard";
 import { globalLeaderboardRouter } from "./routes/leaderboard/global";
-import { devicesRouter } from "./routes/devices";
 import { createDocsRouter } from "./routes/docs";
+import { searchRouter } from "./routes/search";
+
 import { sessionsRouter } from "./routes/me/sessions";
 import { notificationsRouter } from "./routes/notifications";
 import { socialRouter } from "./routes/social";
-import { webhooksRouter } from "./routes/webhooks";
+import { webhooksHealthRouter } from "./routes/webhooks/health";
 import { adminAuditRouter } from "./routes/admin/audit";
 import { adminAuditExportRouter } from "./routes/admin/audit/export";
+import { auditCountsRouter } from "./routes/audit/counts";
 import { adminMarketsRouter } from "./routes/admin/markets";
 import { adminSchemaVersionsRouter } from "./routes/admin/schema-versions";
 import { errorHandler } from "./middleware/errorHandler";
-import { stopIndexerHealthProbe } from "./jobs/indexerHealthProbe";
 import { requestContextStorage } from "./lib/requestContext";
 import { REQUEST_ID_HEADER } from "./lib/http";
 import { register } from "./metrics/registry";
 import { connectWithRetry, closeDb, db } from "./db/client";
 import { stopScheduler } from "./services/scheduler";
 import { startIndexerHealthProbe, stopIndexerHealthProbe } from "./jobs/indexerHealthProbe";
+import { indexerHealthRouter } from "./routes/indexer/health";
+import { indexerCursorRouter } from "./routes/indexer/cursor";
 import { WebhookWorker } from "./workers/webhookWorker";
 import { marketResolverWorker } from "./workers/marketResolver";
 import { backupVerificationWorker } from "./workers/backupVerificationWorker";
 import { reconciliationWorker } from "./workers/reconciliationWorker";
-import { rateLimitStatusRouter } from "./routes/rate-limit/status";
+import { rateLimitRouter } from "./routes/rate-limit";
 import { adminRateLimitInspectRouter } from "./routes/admin/rate-limit/inspect";
 import { quotaRequestsRouter } from "./routes/quota/requests";
-import { startSlowQueryAlerter, stopSlowQueryAlerter } from "./workers/slowQueryAlerter";
-import { scheduledReportsRouter } from "./routes/reports/scheduled";
+import { startSlowQueryAlerter } from "./workers/slowQueryAlerter";
+import { reportsRouter } from "./routes/reports";
+import { fingerprintRouter } from "./routes/fingerprint";
+import { alertsRouter } from "./routes/alerts";
+import { gracefulShutdown } from "./lifecycle/shutdown";
+
 
 const docsEnabled = env.NODE_ENV !== "production" || process.env.ENABLE_DOCS === "true";
 
@@ -72,6 +90,9 @@ function sanitizeRequestId(raw: string): string | undefined {
 
 export function createApp(_options: CreateAppOptions = {}): express.Express {
   const app = express();
+
+  const webhookStore: WebhookStore = options.webhooks?.store ?? new DrizzleWebhookStore(db);
+  const webhooksRouter = createWebhooksRouter({ store: webhookStore });
 
   app.set("etag", false);
 
@@ -111,14 +132,29 @@ export function createApp(_options: CreateAppOptions = {}): express.Express {
     },
   );
 
+  // Resolve, echo, and propagate X-Correlation-Id for every request.
+  // Runs after the ALS context is established so correlationMiddleware can
+  // extend the existing store with the `correlationId` field.
+  app.use(correlationMiddleware);
+
   app.use("/api/admin/webhooks", webhookBodySizeLimitMiddleware);
   app.use(defaultBodySizeLimitMiddleware);
 
+  // Compute a stable SHA-256 fingerprint for every request.
+  // Mounted after body-parsing middleware so that req.body is available
+  // for the fingerprint body-hash computation, and after ALS context +
+  // correlationMiddleware so correlationId is available for logging.
+  app.use(fingerprintMiddleware);
+
   app.use(metricsMiddleware);
+  app.use(metricsHistogramMiddleware);
   app.use("/health", healthRouter);
-  app.use("/healthz/dependencies", dependenciesRouter);
+  app.use("/healthz/dependencies", healthzDependenciesRouter);
   app.use("/api/health/ready", createReadyRouter({ db, redis: redisConnection }));
   app.use("/api/health/dependencies", dependenciesRouter);
+  app.use("/api/health/version", versionRouter);
+  app.use("/api/indexer", indexerHealthRouter);
+  app.use("/api/indexer/cursor", indexerCursorRouter);
 
   const mutationMethods = ["POST", "PATCH"] as const;
   app.use("/api", (req, res, next) =>
@@ -128,29 +164,45 @@ export function createApp(_options: CreateAppOptions = {}): express.Express {
   );
 
   app.use("/api/auth", authRouter);
+  app.use("/api/recommendations", recommendationsRouter);
+  app.use("/api/tags", tagsRouter);
+  app.use("/api/audit", auditRouter);
   app.use("/api/markets", marketsRouter);
+  app.use("/api/markets", commentsRouter);
+  app.use("/api/comments", commentsRouter);
   app.use("/api/predictions", predictionsRouter);
   app.use("/api/leaderboard", leaderboardRouter);
   app.use("/api/leaderboard/global", globalLeaderboardRouter);
-  app.use("/api/rate-limit", rateLimitStatusRouter);
+  app.use("/api/rate-limit", rateLimitRouter);
+  app.use("/api/search", searchRouter);
   app.use("/api/quota/requests", quotaRequestsRouter);
   app.use("/api/notifications", notificationsRouter);
   app.use("/api/webhooks", webhooksRouter);
+  app.use("/api/webhooks/health", webhooksHealthRouter);
   app.use("/api/users/health", usersHealthRouter);
   app.use("/api/users", socialRouter);
   app.use("/api/users", userPortfolioRouter);
+  app.use("/api/users", userStatsRouter);
   app.use("/api/users", usersRouter);
+  app.use("/api/predictions", predictionsRouter);
   app.use("/api/me/devices", devicesRouter);
   app.use("/api/me/sessions", sessionsRouter);
+  app.use("/api/webhooks", webhooksRouter);
   app.use("/api/admin/audit", adminAuditRouter);
   app.use("/api/admin/audit", adminAuditExportRouter);
+  app.use("/api/audit/counts", auditCountsRouter);
   app.use("/api/admin/users", adminUsersRouter);
   app.use("/api/admin/users", adminNotesRouter);
+  app.use("/api/feature-flags", featureFlagsRouter);
   app.use("/api/admin/feature-flags", adminFeatureFlagsRouter);
+  app.use("/api/feature-flags", featureFlagsRouter);
   app.use("/api/admin/markets", adminMarketsRouter);
   app.use("/api/admin/schema-versions", adminSchemaVersionsRouter);
   app.use("/api/admin/rate-limit", adminRateLimitInspectRouter);
-  app.use("/api/reports/scheduled", scheduledReportsRouter);
+  app.use("/api/reports", reportsRouter);
+  app.use("/api/fingerprint", fingerprintRouter);
+  app.use("/api/alerts", alertsRouter);
+
 
   app.get("/metrics", async (req, res) => {
     const metricsAuthToken = process.env.METRICS_AUTH_TOKEN;
@@ -173,23 +225,6 @@ export function createApp(_options: CreateAppOptions = {}): express.Express {
 if (require.main === module) {
   const app = createApp();
   let webhookWorker: WebhookWorker | null = null;
-  let probeHandle: ReturnType<typeof setInterval> | null = null;
-
-  const stopWorkers = async (): Promise<void> => {
-    logger.info("Stopping queue workers");
-    stopSlowQueryAlerter();
-    stopIndexerHealthProbe();
-    if (probeHandle) {
-      clearInterval(probeHandle);
-      probeHandle = null;
-    }
-    await Promise.all([
-      webhookWorker ? webhookWorker.stop() : Promise.resolve(),
-      marketResolverWorker.stop(),
-      backupVerificationWorker.stop(),
-      reconciliationWorker.stop(),
-    ]);
-  };
 
   connectWithRetry()
     .then(() => {
@@ -199,40 +234,44 @@ if (require.main === module) {
       backupVerificationWorker.start();
       reconciliationWorker.start();
       startSlowQueryAlerter();
-      probeHandle = startIndexerHealthProbe();
+      startIndexerHealthProbe();
 
       app.listen(env.PORT, () => {
         logger.info({ port: env.PORT, env: env.NODE_ENV }, "predictify-backend listening");
+        if (env.ENABLE_DOCS) {
+          logger.info(`Swagger UI available at http://localhost:${env.PORT}/docs`);
+        }
         logger.info(`Swagger UI available at http://localhost:${env.PORT}/docs`);
       });
 
-      process.on("SIGTERM", async () => {
-        logger.info("SIGTERM received, shutting down");
+      const handleShutdown = async (signal: string) => {
+        logger.info({ signal }, "shutdown_signal_received");
+        setAuthDraining(true);
+
         const forceExit = setTimeout(() => {
           logger.warn("Forced exit after shutdown timeout");
           process.exit(1);
-        }, 5000).unref();
+        }, 10000).unref();
 
-        await stopWorkers();
-        stopScheduler();
-        await closeDb();
-        clearTimeout(forceExit);
-        process.exit(0);
-      });
+        try {
+          logger.info("Draining in-flight /api/auth requests...");
+          await waitForAuthDrain(5000);
+          logger.info("In-flight /api/auth requests drained successfully");
 
-      process.on("SIGINT", async () => {
-        logger.info("SIGINT received, shutting down gracefully");
-        const forceExit = setTimeout(() => {
-          logger.warn("Forced exit after shutdown timeout");
+          stopScheduler();
+          await closeDb();
+          clearTimeout(forceExit);
+          logger.info("Shutdown completed successfully");
+          process.exit(0);
+        } catch (err) {
+          logger.error({ err }, "Error during shutdown");
+          clearTimeout(forceExit);
           process.exit(1);
-        }, 5000).unref();
+        }
+      };
 
-        await stopWorkers();
-        stopScheduler();
-        await closeDb();
-        clearTimeout(forceExit);
-        process.exit(0);
-      });
+      process.on("SIGTERM", () => handleShutdown("SIGTERM"));
+      process.on("SIGINT", () => handleShutdown("SIGINT"));
     })
     .catch((err) => {
       logger.fatal({ err }, "Failed to start server");

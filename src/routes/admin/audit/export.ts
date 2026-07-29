@@ -6,6 +6,7 @@ import { requireAdmin } from "../../../middleware/requireAdmin";
 import { getAuditLogsStream } from "../../../repositories/auditLogRepo";
 import { getRequestId } from "../../../lib/requestContext";
 import { logger } from "../../../config/logger";
+import { startAuditSpan, endAuditSpan, recordErrorOnSpan } from "../../../otel/spans";
 
 export interface AdminAuditExportRouterOptions {
   rateLimitPerMinute?: number;
@@ -48,12 +49,19 @@ export function createAdminAuditExportRouter(
 
   router.get("/export", async (req, res, next) => {
     const requestId = getRequestId();
+    // For the streaming export handler the span is ended when the response
+    // stream finishes, not when the initial handler returns.  Hook into
+    // response "finish" / "close" / error events so the span duration
+    // reflects the real export time and stream errors are recorded.
+    const span = startAuditSpan("audit.admin.export", req, res);
 
     try {
       const parseResult = exportQuerySchema.safeParse(req.query);
       if (!parseResult.success) {
         const reqId = getRequestId();
-        res.status(400).json({
+        res.status(400);
+        endAuditSpan(span, res);
+        res.json({
           error: {
             code: "validation_error",
             message: parseResult.error.issues[0]?.message ?? "invalid query parameters",
@@ -107,6 +115,8 @@ export function createAdminAuditExportRouter(
           },
           "Error in NDJSON transform stream",
         );
+        recordErrorOnSpan(span, err);
+        // span is ended in the response "close" handler below
       });
 
       ndjsonTransform.pipe(res);
@@ -165,7 +175,9 @@ export function createAdminAuditExportRouter(
           );
 
           if (!res.headersSent) {
-            res.status(500).json({
+            res.status(500);
+            endAuditSpan(span, res);
+            res.json({
               error: {
                 code: "export_error",
                 message: "Failed to stream audit logs",
@@ -190,7 +202,25 @@ export function createAdminAuditExportRouter(
             },
             "Client disconnected before audit export completed",
           );
+          recordErrorOnSpan(span, new Error("client_disconnected"));
           ndjsonTransform.destroy();
+        }
+      });
+
+      // End the span when the response finishes.  This covers:
+      // - natural stream completion (res "finish")
+      // - client disconnect (res "close")
+      // - stream errors that don't already trigger "finish"
+      const endSpanOnResponseFinish = () => {
+        if (span.isRecording()) {
+          endAuditSpan(span, res);
+        }
+      };
+      res.on("finish", endSpanOnResponseFinish);
+      res.on("close", () => {
+        if (span.isRecording()) {
+          // If "finish" already ran, this is a no-op (span already ended).
+          endAuditSpan(span, res);
         }
       });
     } catch (err) {
@@ -202,6 +232,8 @@ export function createAdminAuditExportRouter(
         },
         "Unexpected error in audit export endpoint",
       );
+      recordErrorOnSpan(span, err);
+      span.end();
       next(err);
     }
   });

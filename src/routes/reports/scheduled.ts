@@ -10,9 +10,12 @@
  *   - PATCH  /api/reports/scheduled/:id    — Update a scheduled report
  *   - DELETE /api/reports/scheduled/:id    — Delete a scheduled report
  *
- * All endpoints require authentication via JWT Bearer token. Ownership is
- * enforced on all read, update, and delete operations — a user can only
- * access their own scheduled reports.
+ * All endpoints require authentication via JWT Bearer token (enforced by the
+ * parent reports router). Ownership is enforced on all read, update, and
+ * delete operations — a user can only access their own scheduled reports.
+ *
+ * Rate limiting is applied at the parent /api/reports level via a per-user
+ * token bucket. See src/routes/reports.ts.
  *
  * Input validation is performed at the route boundary using Zod schemas.
  * Structured logging with correlation IDs is emitted on all operations.
@@ -24,16 +27,26 @@ import { z } from "zod";
 import { eq, desc } from "drizzle-orm";
 import { db } from "../../db";
 import { scheduledReports } from "../../db/schema";
-import { requireAuth } from "../../middleware/requireAuth";
 import { RouteErrorFactory } from "../../errors";
 import { logger } from "../../config/logger";
 import { getRequestId } from "../../lib/requestContext";
 import type { Request } from "express";
 
-export const scheduledReportsRouter = Router();
+function getScheduledReportsUserId(req: Request): string {
+  const requestWithUser = req as Request & {
+    user?: { id?: string };
+  };
 
-// Apply authentication to all routes
-scheduledReportsRouter.use(requireAuth);
+  const userId = requestWithUser.user?.id;
+  if (typeof userId === "string" && userId.trim().length > 0) {
+    return userId.trim();
+  }
+
+  throw RouteErrorFactory.unauthorized("Authentication required");
+}
+
+export function createScheduledReportsRouter(): Router {
+  const router = Router();
 
 // ---------------------------------------------------------------------------
 // Validation Schemas
@@ -195,9 +208,9 @@ const listQuerySchema = z.object({
  *   - 422: Validation error with field details
  *   - 500: Internal server error
  */
-scheduledReportsRouter.post("/", async (req, res, next) => {
+  router.post("/", async (req, res, next) => {
   const reqId = getRequestId();
-  const userId = (req as Request & { user: { id: string } }).user.id;
+  const userId = getScheduledReportsUserId(req);
 
   try {
     const parsed = createScheduledReportSchema.safeParse(req.body);
@@ -266,7 +279,7 @@ scheduledReportsRouter.post("/", async (req, res, next) => {
  *   - 401: Unauthenticated
  *   - 500: Internal server error
  */
-scheduledReportsRouter.get("/", async (req, res, next) => {
+  router.get("/", async (req, res, next) => {
   const reqId = getRequestId();
   const userId = (req as Request & { user: { id: string } }).user.id;
 
@@ -285,7 +298,7 @@ scheduledReportsRouter.get("/", async (req, res, next) => {
 
     // Fetch total count for pagination metadata
     const [countResult] = await db
-      .select({ count: db.$count() })
+      .select({ count: db.$count(scheduledReports) })
       .from(scheduledReports)
       .where(eq(scheduledReports.userId, userId));
 
@@ -346,9 +359,9 @@ scheduledReportsRouter.get("/", async (req, res, next) => {
  *   - 404: Scheduled report not found
  *   - 500: Internal server error
  */
-scheduledReportsRouter.get("/:id", async (req, res, next) => {
+  router.get("/:id", async (req, res, next) => {
   const reqId = getRequestId();
-  const userId = (req as Request & { user: { id: string } }).user.id;
+  const userId = getScheduledReportsUserId(req);
   const { id } = req.params;
 
   try {
@@ -426,9 +439,9 @@ scheduledReportsRouter.get("/:id", async (req, res, next) => {
  *   - 422: Validation error with field details
  *   - 500: Internal server error
  */
-scheduledReportsRouter.patch("/:id", async (req, res, next) => {
+  router.patch("/:id", async (req, res, next) => {
   const reqId = getRequestId();
-  const userId = (req as Request & { user: { id: string } }).user.id;
+  const userId = getScheduledReportsUserId(req);
   const { id } = req.params;
 
   try {
@@ -529,9 +542,9 @@ scheduledReportsRouter.patch("/:id", async (req, res, next) => {
  *   - 404: Scheduled report not found
  *   - 500: Internal server error
  */
-scheduledReportsRouter.delete("/:id", async (req, res, next) => {
+  router.delete("/:id", async (req, res, next) => {
   const reqId = getRequestId();
-  const userId = (req as Request & { user: { id: string } }).user.id;
+  const userId = getScheduledReportsUserId(req);
   const { id } = req.params;
 
   try {
@@ -569,4 +582,9 @@ scheduledReportsRouter.delete("/:id", async (req, res, next) => {
   } catch (error) {
     next(error);
   }
-});
+  });
+
+  return router;
+}
+
+export const scheduledReportsRouter = createScheduledReportsRouter();

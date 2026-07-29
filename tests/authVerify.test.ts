@@ -95,6 +95,38 @@ describe("POST /api/auth/verify", () => {
     expect(res.body.error.code).toBe("challenge_used");
   });
 
+  it("supports ETag and returns 304 on match", async () => {
+    const mockExpiresAt = new Date(Date.now() + 300000);
+    const mockCreatedAt = new Date();
+
+    verifyAndConsume.mockResolvedValueOnce({ nonce, expiresAt: mockExpiresAt });
+    upsertUserByStellarAddress.mockResolvedValueOnce({ id: "user-1", stellarAddress: address, createdAt: mockCreatedAt });
+
+    const payload = {
+      stellarAddress: address,
+      nonce,
+      signature: signatureForNonce(keypair, nonce),
+    };
+
+    const res = await request(app).post("/api/auth/verify").send(payload);
+
+    expect(res.status).toBe(200);
+    expect(res.headers.etag).toBeDefined();
+
+    const etag = res.headers.etag;
+
+    verifyAndConsume.mockResolvedValueOnce({ nonce, expiresAt: mockExpiresAt });
+    upsertUserByStellarAddress.mockResolvedValueOnce({ id: "user-1", stellarAddress: address, createdAt: mockCreatedAt });
+
+    const res304 = await request(app)
+      .post("/api/auth/verify")
+      .set("If-None-Match", etag)
+      .send(payload);
+
+    expect(res304.status).toBe(304);
+    expect(res304.body).toEqual({});
+  });
+
   it("returns 401 bad_signature for wrong signer", async () => {
     verifyAndConsume.mockResolvedValueOnce({ nonce, expiresAt: new Date(Date.now() + 300000) });
     const wrongKeypair = Keypair.random();

@@ -9,6 +9,11 @@ window (default 5 requests per minute) to reduce abuse from repeated challenge o
 verification attempts. The limiter uses the submitted Stellar address when present
 and falls back to the client IP otherwise.
 
+User-facing routes under `/api/users` (excluding `/api/users/health`) use a
+per-user fixed-window limiter (default **60 requests per minute**). Authenticated
+callers are keyed by database user id (`users:{id}`); anonymous callers fall back
+to IP. See [`docs/users-rate-limiting.md`](./users-rate-limiting.md).
+
 ## Configuration
 
 | Variable | Default | Description |
@@ -60,6 +65,46 @@ sliding-window usage, remaining quota, and reset timestamp for the address.
   }
 }
 ```
+
+## Rate-limit event list
+
+`GET /api/rate-limit` is an admin-only, cursor-paginated listing of blocked
+rate-limit audit events. Results are ordered newest-first by `(created_at, id)`
+so pagination stays stable when new blocked requests are written while a client
+is paging through the list.
+
+### Query parameters
+
+- `cursor` - optional opaque token returned by the previous page
+- `limit` - optional positive integer page size
+
+### Response (200)
+
+```json
+{
+  "data": [
+    {
+      "id": "11111111-1111-1111-1111-111111111111",
+      "action": "rate_limit.blocked",
+      "walletAddress": null,
+      "ip": "127.0.0.1",
+      "correlationId": "req-123",
+      "rateLimitContext": {
+        "limit": 60,
+        "remaining": 0,
+        "resetAt": "2026-07-24T12:00:00.000Z",
+        "blocked": true
+      },
+      "createdAt": "2026-07-24T12:00:00.000Z"
+    }
+  ],
+  "nextCursor": "djF8MjR8..."
+}
+```
+
+The endpoint uses the same standard error envelope as the rest of the API and
+returns `400` for malformed query parameters, `401` for missing auth, and `403`
+for non-admin callers.
 
 ### Anonymous response (200)
 

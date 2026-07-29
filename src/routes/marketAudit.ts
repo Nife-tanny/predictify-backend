@@ -6,6 +6,7 @@ import { markets, marketAuditLog } from "../db/schema";
 import { clampLimit, decodeCursor, encodeCursor } from "../utils/cursor";
 import { logger } from "../config/logger";
 import { RouteErrorFactory } from "../errors";
+import { startAuditSpan, endAuditSpan, recordErrorOnSpan } from "../otel/spans";
 
 const auditQuerySchema = z
   .object({
@@ -20,6 +21,7 @@ const auditQuerySchema = z
 export const marketAuditRouter = Router({ mergeParams: true });
 
 marketAuditRouter.get("/", async (req, res, next) => {
+  const span = startAuditSpan("audit.market.list", req, res);
   const reqId = String((req as { id?: string }).id ?? "anon");
   try {
     const parsed = auditQuerySchema.safeParse(req.query);
@@ -28,6 +30,8 @@ marketAuditRouter.get("/", async (req, res, next) => {
     }
 
     const marketId = (req.params as Record<string, string>).id;
+    span.setAttribute("market.id", marketId);
+
     const exists = await db
       .select({ id: markets.id })
       .from(markets)
@@ -67,6 +71,7 @@ marketAuditRouter.get("/", async (req, res, next) => {
 
     logger.info({ reqId, marketId, count: data.length }, "market_audit_listed");
 
+    endAuditSpan(span, res);
     return res.json({
       data,
       nextCursor:
@@ -75,6 +80,7 @@ marketAuditRouter.get("/", async (req, res, next) => {
           : null,
     });
   } catch (err) {
+    recordErrorOnSpan(span, err);
     return next(err);
   }
 });

@@ -36,6 +36,7 @@ Once running:
 - **Swagger UI** → http://localhost:3001/docs *(non-production only; set `ENABLE_DOCS=true` to enable in production)*
 - **OpenAPI JSON** → http://localhost:3001/openapi.json *(always available)*
 - **Audit export** → `GET /api/admin/audit/export` streams admin audit logs as `application/x-ndjson`
+- **Audit counts** → `GET /api/audit/counts` returns a per-action counts summary of audit log entries for admin dashboards
 
 
 ## Health Endpoints
@@ -45,6 +46,7 @@ Once running:
 | `GET /health` | None | Liveness check — returns `{ "status": "ok" }` immediately. Use this to verify the process is up. |
 | `GET /healthz/dependencies` | None | Shallow dependency probe — Postgres, Soroban RPC, Horizon, webhook queue (Redis). Cached for 5 s. Returns 200/207/503. |
 | `GET /api/health/ready` | None | **Deep readiness check** — runs four parallel probes with 1-second timeouts each. Returns 200 when ready, 503 when unready. |
+| `GET /api/indexer/health` | None | Indexer health — probes external dependencies (Postgres + Soroban RPC) and compares the persisted cursor against the chain tip. Returns `"ok"` / `"degraded"` / `"down"` with dependency statuses in `dependencies` and lag data in `data`. Always HTTP 200. Supports [ETag / conditional GET](#etag--conditional-get-caching). |
 
 ### `GET /api/health/ready` response
 
@@ -69,6 +71,31 @@ Once running:
 - Not cached — orchestrators (Kubernetes, ECS) get a fresh signal on every poll.
 
 See [docs/health-ready.md](docs/health-ready.md) for full runbook.
+
+## ETag / conditional GET caching
+
+Select read endpoints emit a strong `ETag` (SHA-256 of the response body) and honor
+`If-None-Match` with a `304 Not Modified` when the caller's cached copy is still
+current — this cuts bandwidth for clients that poll frequently. Implemented in
+[src/middleware/etag.ts](src/middleware/etag.ts) (`conditionalGet`).
+
+Currently applied to:
+
+- `GET /api/markets` / `GET /api/markets/:id`
+- `GET /api/users` / `GET /api/users/me` / `GET /api/users/:address/predictions` /
+  `GET /api/users/:stellarAddress/profile`
+- `GET /api/auth/*` (session-derived responses)
+- `GET /api/indexer/health` — cursor/chain-tip lag rarely changes between polls, so
+  monitoring/orchestrator probes that hit this endpoint on a tight interval get a
+  bodyless `304` instead of re-downloading the same status on every tick.
+
+Behavior:
+
+- Every `200` response includes `ETag` and `Cache-Control: no-cache` (clients may
+  cache, but must revalidate before reuse).
+- Send the previously-received `ETag` value back as `If-None-Match` to revalidate;
+  a match returns `304` with no body, a mismatch returns a fresh `200`.
+- Error responses (e.g. `404`) never carry an `ETag`.
 
 ## Request body size limits
 
@@ -119,6 +146,14 @@ scripts/       dev helpers (check-drizzle-drift.ts)
 .github/
   workflows/   CI pipeline (lint, test, drift check, migrate)
 ```
+
+## Feature Flags
+
+The public feature-flags endpoint returns the current flag state for client consumption:
+
+- **`GET /api/feature-flags`** — returns `{ data: { FLAG: { enabled, metadata? }, ... }, correlationId }`. Optional query params: `environment` and `clientVersion`.
+
+A **5-second per-request timeout** is enforced. Requests that exceed it receive `HTTP 504` with `{ error: { code: "gateway_timeout", ... } }`. The handler uses cooperative cancellation via `AbortSignal` so in-flight work is abandoned cleanly. See [docs/feature-flags.md](docs/feature-flags.md) for the full runbook.
 
 ## Global Leaderboard
 

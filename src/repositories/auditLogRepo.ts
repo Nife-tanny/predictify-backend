@@ -1,4 +1,4 @@
-import { and, desc, eq, lt, or, gte, lte } from "drizzle-orm";
+import { and, count, desc, eq, lt, or, gte, lte } from "drizzle-orm";
 import { db } from "../db";
 import { auditLogs } from "../db/schema";
 import { clampLimit, decodeCursor, encodeCursor, type Page } from "../utils/cursor";
@@ -120,4 +120,48 @@ export async function* getAuditLogsStream(
   for (const row of rows) {
     yield row as AuditLogItem;
   }
+}
+
+export interface AuditActionCount {
+  action: string;
+  count: number;
+}
+
+export interface AuditCountsSummary {
+  totalCount: number;
+  byAction: AuditActionCount[];
+}
+
+/**
+ * Aggregate audit log entries into a per-action counts summary, optionally
+ * scoped to a date range. Used to power admin dashboards without requiring
+ * the full paginated log to be fetched and counted client-side.
+ */
+export async function getAuditCounts(
+  filters: Pick<AuditLogFilters, "startDate" | "endDate">,
+): Promise<AuditCountsSummary> {
+  const conditions = [];
+  if (filters.startDate) {
+    conditions.push(gte(auditLogs.createdAt, filters.startDate));
+  }
+  if (filters.endDate) {
+    conditions.push(lte(auditLogs.createdAt, filters.endDate));
+  }
+
+  const whereClause = conditions.length > 0 ? and(...conditions) : undefined;
+  const countExpr = count();
+
+  const rows = await db
+    .select({ action: auditLogs.action, count: countExpr })
+    .from(auditLogs)
+    .where(whereClause)
+    .groupBy(auditLogs.action)
+    .orderBy(desc(countExpr));
+
+  const totalCount = rows.reduce((sum, row) => sum + row.count, 0);
+
+  return {
+    totalCount,
+    byAction: rows.map((row) => ({ action: row.action, count: row.count })),
+  };
 }
