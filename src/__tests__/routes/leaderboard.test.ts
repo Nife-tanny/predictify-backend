@@ -8,6 +8,16 @@ import * as leaderboardService from "../../services/leaderboardService";
 // Mock the service
 jest.mock("../../services/leaderboardService");
 
+// Mock the logger to avoid noise in test output
+jest.mock("../../config/logger", () => ({
+  logger: { info: jest.fn(), warn: jest.fn(), debug: jest.fn(), error: jest.fn() },
+}));
+
+// Helper to extract bare ETag hash
+function etagHash(etag: string): string {
+  return etag.replace(/^"|"$/g, "");
+}
+
 describe("Leaderboard Routes", () => {
   let app: express.Application;
 
@@ -423,6 +433,172 @@ describe("Leaderboard Routes", () => {
 
       expect(response.status).toBe(400);
       expect(response.body.error.code).toBe("validation_error");
+    });
+  });
+
+  describe("ETag / 304 conditional GET for GET /api/leaderboard", () => {
+    it("returns 200 with ETag and Cache-Control on first request", async () => {
+      (leaderboardService.getLeaderboard as any).mockResolvedValueOnce([
+        mockLeaderboardEntry,
+      ]);
+
+      const res = await request(app).get("/api/leaderboard");
+
+      expect(res.status).toBe(200);
+      expect(res.headers["etag"]).toMatch(/^"[a-f0-9]{64}"$/);
+      expect(res.headers["cache-control"]).toBe("no-cache");
+    });
+
+    it("returns 304 when If-None-Match matches current ETag", async () => {
+      (leaderboardService.getLeaderboard as any).mockResolvedValueOnce([
+        mockLeaderboardEntry,
+      ]);
+
+      const first = await request(app).get("/api/leaderboard");
+      const etag = first.headers["etag"] as string;
+
+      (leaderboardService.getLeaderboard as any).mockResolvedValueOnce([
+        mockLeaderboardEntry,
+      ]);
+
+      const second = await request(app)
+        .get("/api/leaderboard")
+        .set("If-None-Match", etag);
+
+      expect(second.status).toBe(304);
+      expect(second.text).toBe("");
+    });
+
+    it("returns 200 when If-None-Match does not match", async () => {
+      (leaderboardService.getLeaderboard as any).mockResolvedValueOnce([
+        mockLeaderboardEntry,
+      ]);
+
+      const res = await request(app)
+        .get("/api/leaderboard")
+        .set("If-None-Match", '"00000000stale00000000"');
+
+      expect(res.status).toBe(200);
+      expect(res.body.data).toEqual([mockLeaderboardEntry]);
+    });
+
+    it("returns 304 with unquoted (bare hash) If-None-Match", async () => {
+      (leaderboardService.getLeaderboard as any).mockResolvedValueOnce([
+        mockLeaderboardEntry,
+      ]);
+
+      const first = await request(app).get("/api/leaderboard");
+      const bareHash = etagHash(first.headers["etag"] as string);
+
+      (leaderboardService.getLeaderboard as any).mockResolvedValueOnce([
+        mockLeaderboardEntry,
+      ]);
+
+      const second = await request(app)
+        .get("/api/leaderboard")
+        .set("If-None-Match", bareHash);
+
+      expect(second.status).toBe(304);
+    });
+
+    it("ETag is stable across repeated requests for the same data", async () => {
+      (leaderboardService.getLeaderboard as any).mockResolvedValueOnce([
+        mockLeaderboardEntry,
+      ]);
+      const r1 = await request(app).get("/api/leaderboard");
+
+      (leaderboardService.getLeaderboard as any).mockResolvedValueOnce([
+        mockLeaderboardEntry,
+      ]);
+      const r2 = await request(app).get("/api/leaderboard");
+
+      expect(r1.headers["etag"]).toBe(r2.headers["etag"]);
+    });
+
+    it("ETag changes when leaderboard data changes", async () => {
+      (leaderboardService.getLeaderboard as any).mockResolvedValueOnce([
+        mockLeaderboardEntry,
+      ]);
+      const r1 = await request(app).get("/api/leaderboard");
+
+      const changedEntry = { ...mockLeaderboardEntry, total_predictions: 200 };
+      (leaderboardService.getLeaderboard as any).mockResolvedValueOnce([
+        changedEntry,
+      ]);
+      const r2 = await request(app).get("/api/leaderboard");
+
+      expect(r1.headers["etag"]).not.toBe(r2.headers["etag"]);
+    });
+
+    it("304 still includes ETag header", async () => {
+      (leaderboardService.getLeaderboard as any).mockResolvedValueOnce([
+        mockLeaderboardEntry,
+      ]);
+
+      const first = await request(app).get("/api/leaderboard");
+      const etag = first.headers["etag"] as string;
+
+      (leaderboardService.getLeaderboard as any).mockResolvedValueOnce([
+        mockLeaderboardEntry,
+      ]);
+
+      const second = await request(app)
+        .get("/api/leaderboard")
+        .set("If-None-Match", etag);
+
+      expect(second.status).toBe(304);
+      expect(second.headers["etag"]).toBe(etag);
+    });
+  });
+
+  describe("ETag / 304 conditional GET for GET /api/leaderboard/user/:stellarAddress", () => {
+    it("returns 200 with ETag and Cache-Control on first request", async () => {
+      (
+        leaderboardService.getUserLeaderboardEntry as jest.Mock
+      ).mockResolvedValueOnce(mockLeaderboardEntry);
+
+      const res = await request(app).get(
+        `/api/leaderboard/user/${mockLeaderboardEntry.stellar_address}`,
+      );
+
+      expect(res.status).toBe(200);
+      expect(res.headers["etag"]).toMatch(/^"[a-f0-9]{64}"$/);
+      expect(res.headers["cache-control"]).toBe("no-cache");
+    });
+
+    it("returns 304 when If-None-Match matches", async () => {
+      (
+        leaderboardService.getUserLeaderboardEntry as jest.Mock
+      ).mockResolvedValueOnce(mockLeaderboardEntry);
+
+      const first = await request(app).get(
+        `/api/leaderboard/user/${mockLeaderboardEntry.stellar_address}`,
+      );
+      const etag = first.headers["etag"] as string;
+
+      (
+        leaderboardService.getUserLeaderboardEntry as jest.Mock
+      ).mockResolvedValueOnce(mockLeaderboardEntry);
+
+      const second = await request(app)
+        .get(`/api/leaderboard/user/${mockLeaderboardEntry.stellar_address}`)
+        .set("If-None-Match", etag);
+
+      expect(second.status).toBe(304);
+      expect(second.text).toBe("");
+    });
+
+    it("returns 200 when If-None-Match does not match", async () => {
+      (
+        leaderboardService.getUserLeaderboardEntry as jest.Mock
+      ).mockResolvedValueOnce(mockLeaderboardEntry);
+
+      const res = await request(app)
+        .get(`/api/leaderboard/user/${mockLeaderboardEntry.stellar_address}`)
+        .set("If-None-Match", '"00000000stale00000000"');
+
+      expect(res.status).toBe(200);
+      expect(res.body.data).toEqual(mockLeaderboardEntry);
     });
   });
 
