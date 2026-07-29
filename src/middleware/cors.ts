@@ -136,6 +136,29 @@ export function marketsCors(): ReturnType<typeof createCorsAllowlistMiddleware> 
   return marketsCorsMiddleware;
 }
 
+/**
+ * Pre-configured CORS middleware for the audit endpoint.
+ * Reads allowed origins from the `AUDIT_CORS_ALLOWED_ORIGINS` env variable.
+ * When the allowlist is empty, all cross-origin requests to /api/audit are denied.
+ */
+let auditCorsMiddleware: ReturnType<typeof createCorsAllowlistMiddleware> | null = null;
+
+export function auditCors(): ReturnType<typeof createCorsAllowlistMiddleware> {
+  if (!auditCorsMiddleware) {
+    const raw = env.AUDIT_CORS_ALLOWED_ORIGINS ?? "";
+    const allowedOrigins = raw
+      .split(",")
+      .map((o) => o.trim())
+      .filter((o) => o.length > 0);
+    auditCorsMiddleware = createCorsAllowlistMiddleware({
+      allowedOrigins,
+      allowCredentials: true,
+      maxAgeSeconds: 600,
+    });
+  }
+  return auditCorsMiddleware;
+}
+
 export const enforceCors = marketsCors();
 
 /**

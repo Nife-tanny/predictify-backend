@@ -50,7 +50,7 @@ const baseSchema = z.object({
   // ── Markets CORS ─────────────────────────────────────────
   MARKETS_CORS_ALLOWED_ORIGINS: z.string().default(""),
 
-  // ── Audit CORS ───────────────────────────────────────────
+  // ── Audit CORS ──────────────────────────────────────────
   AUDIT_CORS_ALLOWED_ORIGINS: z.string().default(""),
 
   // ── Geo-blocking ──────────────────────────────────────────

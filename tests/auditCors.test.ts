@@ -3,10 +3,6 @@ import request from "supertest";
 import express from "express";
 import { createCorsAllowlistMiddleware } from "../src/middleware/cors";
 
-/**
- * Lightweight error handler for CORS tests.
- * Avoids importing the broken errorHandler.ts which contains a merge conflict.
- */
 function testErrorHandler(
   err: unknown,
   _req: express.Request,
@@ -18,12 +14,6 @@ function testErrorHandler(
   res.status(status).json({ error: { code } });
 }
 
-/**
- * Builds a test app with a cors-protected /api/audit route to verify
- * the CORS allowlist behaviour. Uses createCorsAllowlistMiddleware directly
- * to simulate what auditCors() does, without requiring the full router
- * or DB connections.
- */
 function makeApp(allowedOrigins: string[]): express.Express {
   const app = express();
   app.use(express.json());
@@ -70,7 +60,7 @@ describe("Audit CORS allowlist enforcement", () => {
     beforeEach(() => {
       app = makeApp([
         "http://localhost:5173",
-        "https://app.predictify.dev",
+        "https://admin.predictify.dev",
       ]);
     });
 
@@ -127,11 +117,11 @@ describe("Audit CORS allowlist enforcement", () => {
     it("allows requests from the second configured origin", async () => {
       const res = await request(app)
         .get("/api/audit")
-        .set("Origin", "https://app.predictify.dev");
+        .set("Origin", "https://admin.predictify.dev");
 
       expect(res.status).toBe(200);
       expect(res.headers["access-control-allow-origin"]).toBe(
-        "https://app.predictify.dev",
+        "https://admin.predictify.dev",
       );
     });
   });
@@ -142,7 +132,7 @@ describe("Audit CORS allowlist enforcement", () => {
     beforeEach(() => {
       app = makeApp([
         "http://localhost:5173",
-        "https://app.predictify.dev",
+        "https://admin.predictify.dev",
       ]);
     });
 
@@ -193,7 +183,7 @@ describe("Audit CORS allowlist enforcement", () => {
   });
 
   describe("nested routes enforcement", () => {
-    it("enforces CORS on sub-paths like /api/audit/events", async () => {
+    it("enforces CORS on sub-paths like /api/audit/counts", async () => {
       const app = express();
       app.use(express.json());
 
@@ -202,16 +192,14 @@ describe("Audit CORS allowlist enforcement", () => {
         allowCredentials: true,
       });
 
-      // Simulate nested router structure: CORS applied on the parent
-      // and sub-routers inherit it.
       const subRouter = express.Router();
-      subRouter.get("/events", (_req, res) => res.json({ data: [] }));
+      subRouter.get("/counts", (_req, res) => res.json({ data: [] }));
 
       app.use("/api/audit", corsMw, subRouter);
       app.use(testErrorHandler);
 
       const res = await request(app)
-        .get("/api/audit/events")
+        .get("/api/audit/counts")
         .set("Origin", "https://evil.example.com");
 
       expect(res.status).toBe(403);
@@ -227,13 +215,13 @@ describe("Audit CORS allowlist enforcement", () => {
       });
 
       const subRouter = express.Router();
-      subRouter.get("/:id", (_req, res) => res.json({ data: {} }));
+      subRouter.get("/counts", (_req, res) => res.json({ data: [] }));
 
       app.use("/api/audit", corsMw, subRouter);
       app.use(testErrorHandler);
 
       const res = await request(app)
-        .get("/api/audit/some-audit-id")
+        .get("/api/audit/counts")
         .set("Origin", "http://localhost:5173");
 
       expect(res.status).toBe(200);

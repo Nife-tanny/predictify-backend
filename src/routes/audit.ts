@@ -4,7 +4,8 @@ import { auditCors } from "../middleware/cors";
 
 export const auditRouter = Router();
 
-// Apply CORS allowlist middleware from env (deny by default; preflight cached)
+// Enforce CORS allowlist early so unapproved origins are rejected
+// before any processing (preflight responses cached via Access-Control-Max-Age).
 auditRouter.use(auditCors());
 
 // Apply structured access log middleware to all routes in this router
