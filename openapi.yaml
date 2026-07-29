@@ -1437,8 +1437,154 @@ components:
         - failedAt
         - replayedAt
         - replayDeliveryId
+    FingerprintResponse:
+      type: object
+      properties:
+        fingerprint:
+          type: string
+          description: 64-character hex SHA-256 fingerprint of the request structure
+          minLength: 64
+          maxLength: 64
+          pattern: '^[0-9a-f]{64}$'
+        correlationId:
+          type: string
+          description: Correlation ID for distributed tracing
+        method:
+          type: string
+          description: HTTP method of the request
+        path:
+          type: string
+          description: Normalised path of the request (excludes query string)
+        computedAt:
+          type: string
+          format: date-time
+          description: ISO 8601 timestamp when the fingerprint was computed
+      required:
+        - fingerprint
+        - correlationId
+        - method
+        - path
+        - computedAt
   parameters: {}
 paths:
+  /api/comments:
+    get:
+      tags:
+        - Comments
+      summary: List all comments
+      description: Root comments endpoint for listing comments securely.
+      parameters:
+        - in: query
+          name: limit
+          schema:
+            type: integer
+            maximum: 100
+            minimum: 1
+          required: false
+        - in: query
+          name: cursor
+          schema:
+            type: string
+          required: false
+      responses:
+        '200':
+          description: A list of comments
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items:
+                      type: object
+                  nextCursor:
+                    type: string
+                    nullable: true
+                  message:
+                    type: string
+              examples:
+                Success:
+                  summary: Example successful response
+                  value:
+                    data: []
+                    nextCursor: null
+                    message: "Comments fetched securely"
+    post:
+      tags:
+        - Comments
+      summary: Create a new comment
+      description: Creates a new comment and optionally dispatches an outbound call propagating X-Correlation-Id.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                marketId:
+                  type: string
+                body:
+                  type: string
+                  maxLength: 2000
+                authorAddress:
+                  type: string
+                outboundUrl:
+                  type: string
+                  format: uri
+              required:
+                - marketId
+                - body
+            examples:
+              CreateCommentExample:
+                summary: Example create comment request
+                value:
+                  marketId: "market-123"
+                  body: "This market has an interesting prediction."
+                  authorAddress: "GBX..."
+                  outboundUrl: "https://webhook.site/abc"
+      responses:
+        '201':
+          description: Comment created successfully
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: object
+                    properties:
+                      id:
+                        type: string
+                      marketId:
+                        type: string
+                      body:
+                        type: string
+                      authorAddress:
+                        type: string
+                        nullable: true
+                      createdAt:
+                        type: string
+                        format: date-time
+                  message:
+                    type: string
+              examples:
+                SuccessExample:
+                  summary: Example successful creation
+                  value:
+                    data:
+                      id: "c-1678886400000"
+                      marketId: "market-123"
+                      body: "This market has an interesting prediction."
+                      authorAddress: "GBX..."
+                      createdAt: "2023-03-15T12:00:00.000Z"
+                    message: "Comment created successfully"
+        '400':
+          description: Validation error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ValidationErrorBody'
   /health:
     get:
       operationId: healthCheck
@@ -2184,6 +2330,33 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ErrorBody'
+  /api/fingerprint:
+    get:
+      operationId: getRequestFingerprint
+      tags:
+        - Fingerprint
+      summary: Get the SHA-256 fingerprint of the current request
+      description: >-
+        Returns a stable SHA-256 fingerprint computed from the request's structural
+        identity (method, path, Content-Type, Accept, Authorization scheme, and body hash).
+        The fingerprint is deterministic — identical requests produce the same fingerprint —
+        enabling forensic correlation, retry detection, and audit-log enrichment.
+        The response also includes the X-Correlation-Id for distributed tracing.
+      responses:
+        '200':
+          description: Fingerprint computed successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/FingerprintResponse'
+              examples:
+                fingerprint:
+                  value:
+                    fingerprint: 'e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855'
+                    correlationId: '550e8400-e29b-41d4-a716-446655440000'
+                    method: 'GET'
+                    path: '/api/fingerprint'
+                    computedAt: '2026-07-28T12:00:00.000Z'
   /api/rate-limit/status:
     get:
       operationId: getRateLimitStatus
@@ -4233,13 +4406,200 @@ paths:
                     type: string
                     nullable: true
                     format: uuid
+required:
+                      - error
+                      - replayDeliveryId
+                  examples:
+                    alreadyReplayed:
+                      summary: This DLQ row was already replayed — idempotency guard triggered
+                      value:
+                        error:
+                          type: already_replayed
+                        replayDeliveryId: ffff4444-dddd-4000-8000-000000000005
+
+  /api/invites:
+    post:
+      operationId: createInvite
+      tags:
+        - Invites
+      summary: Create a new invite
+      description: >
+        Creates an invite for the authenticated user. Rate-limited per user
+        with a token-bucket algorithm (60 tokens per 60 s window by default).
+      security:
+        - bearerAuth: []
+      responses:
+        '201':
+          description: Invite created
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: object
+                    properties:
+                      message:
+                        type: string
+                    required:
+                      - message
                 required:
-                  - error
-                  - replayDeliveryId
+                  - data
+        '401':
+          description: Missing or invalid JWT
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '429':
+          description: Rate limit exceeded
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+    get:
+      operationId: listInvites
+      tags:
+        - Invites
+      summary: List invites for the authenticated user
+      description: >
+        Lists invites for the authenticated user. Subject to the same per-user
+        token-bucket rate limit as POST /api/invites.
+      security:
+        - bearerAuth: []
+      responses:
+        '200':
+          description: List of invites
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items:
+                      type: object
+                required:
+                  - data
+        '401':
+          description: Missing or invalid JWT
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '429':
+          description: Rate limit exceeded
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+  /api/referrals:
+    post:
+      operationId: createReferral
+      tags:
+        - Referrals
+      summary: Create a referral code
+      description: Creates a new referral code for the authenticated user.
+      security:
+        - bearerAuth: []
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                campaignId:
+                  type: string
+            examples:
+              success:
+                summary: Create referral request
+                value:
+                  campaignId: FWC26
+      responses:
+        '201':
+          description: Referral created
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: object
+                    properties:
+                      referralCode:
+                        type: string
+                      message:
+                        type: string
+                    required:
+                      - referralCode
+                      - message
+                required:
+                  - data
               examples:
-                alreadyReplayed:
-                  summary: This DLQ row was already replayed — idempotency guard triggered
+                success:
+                  summary: Referral code created successfully
                   value:
-                    error:
-                      type: already_replayed
-                    replayDeliveryId: ffff4444-dddd-4000-8000-000000000005
+                    data:
+                      referralCode: REF-ABC-123
+                      message: Referral created successfully
+        '401':
+          description: Missing or invalid JWT
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+    get:
+      operationId: listReferrals
+      tags:
+        - Referrals
+      summary: List user referrals
+      description: Lists all referrals made by the authenticated user.
+      security:
+        - bearerAuth: []
+      responses:
+        '200':
+          description: List of referrals
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        id:
+                          type: string
+                        referredUser:
+                          type: string
+                        status:
+                          type: string
+                          enum:
+                            - pending
+                            - completed
+                        createdAt:
+                          type: string
+                          format: date-time
+                      required:
+                        - id
+                        - referredUser
+                        - status
+                        - createdAt
+                required:
+                  - data
+              examples:
+                success:
+                  summary: Referral list
+                  value:
+                    data:
+                      - id: ref-001
+                        referredUser: GD2...
+                        status: completed
+                        createdAt: 2026-07-28T12:00:00Z
+        '401':
+          description: Missing or invalid JWT
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'

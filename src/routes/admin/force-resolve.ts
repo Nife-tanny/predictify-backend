@@ -6,7 +6,7 @@ import { db } from "../../db";
 import { markets, marketAuditLog } from "../../db/schema";
 import { RouteErrorFactory } from "../../errors";
 import { logger } from "../../config/logger";
-import { getRequestId } from "../../lib/requestContext";
+import { getCorrelationId } from "../../middleware/correlation";
 
 const bodySchema = z.object({
   winningOutcome: z.string().min(1, "winningOutcome is required"),
@@ -18,7 +18,7 @@ forceResolveRouter.use(requireAdmin);
 
 forceResolveRouter.post("/:id", async (req, res, next) => {
   try {
-    const correlationId = getRequestId() ?? "unknown";
+    const correlationId = getCorrelationId() ?? "unknown";
 
     const parsed = bodySchema.safeParse(req.body);
     if (!parsed.success) {

@@ -76,6 +76,14 @@ async function seedMarkets(rows: Array<{
 function createMarketsApp() {
   const app = express();
   app.use(express.json());
+  // Inject a default Origin header so the CORS allowlist middleware
+  // applied inside marketsRouter passes in tests.
+  app.use((req, _res, next) => {
+    if (!req.headers["origin"]) {
+      req.headers["origin"] = "http://localhost:5173";
+    }
+    next();
+  });
   app.use((req, _res, next) => {
     requestContextStorage.run({ requestId: uuidv4() }, next);
   });

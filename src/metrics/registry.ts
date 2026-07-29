@@ -26,6 +26,14 @@ export const webhookRequestDuration = new Histogram({
   registers: [register],
 });
 
+export const statsRequestDuration = new Histogram({
+  name: "stats_request_duration_seconds",
+  help: "Latency of /api/stats requests in seconds, segmented by route and status code",
+  labelNames: ["route", "status"] as const,
+  buckets: [0.01, 0.05, 0.1, 0.5, 1, 2, 5, 10], // Explicit buckets for latency tracking
+  registers: [register],
+});
+
 export const indexerPollsTotal = new Counter({
   name: "indexer_polls_total",
   help: "Total number of indexer poll cycles completed",
@@ -124,5 +132,37 @@ export const usersEndpointDuration = new Histogram({
   help: "Request duration in seconds for /api/users endpoints, segmented by method, route, and status",
   labelNames: ["method", "route", "status"] as const,
   buckets: [0.01, 0.05, 0.1, 0.5, 1, 2, 5, 10],
+  registers: [register],
+});
+
+// Generic per-endpoint metrics used by metricsHistogramMiddleware.
+export const endpointRequestsTotal = new Counter({
+  name: "endpoint_requests_total",
+  help: "Total number of requests to all instrumented endpoints, segmented by method, route, and status",
+  labelNames: ["method", "route", "status"] as const,
+  registers: [register],
+});
+
+export const endpointRequestDuration = new Histogram({
+  name: "endpoint_request_duration_seconds",
+  help: "Request duration in seconds for all instrumented endpoints, segmented by method, route, and status",
+  labelNames: ["method", "route", "status"] as const,
+  buckets: [0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5],
+  registers: [register],
+});
+
+// Per-endpoint metrics for /api/notifications.
+export const notificationsEndpointRequestsTotal = new Counter({
+  name: "notifications_endpoint_requests_total",
+  help: "Total number of requests to /api/notifications endpoints, segmented by method, route, and status",
+  labelNames: ["method", "route", "status"] as const,
+  registers: [register],
+});
+
+export const notificationsEndpointDuration = new Histogram({
+  name: "notifications_endpoint_duration_seconds",
+  help: "Request duration in seconds for /api/notifications endpoints, segmented by method, route, and status",
+  labelNames: ["method", "route", "status"] as const,
+  buckets: [0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5],
   registers: [register],
 });

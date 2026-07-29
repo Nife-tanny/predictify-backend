@@ -30,12 +30,11 @@ import { rateLimit } from "express-rate-limit";
 import { z } from "zod";
 import { logger } from "../../config/logger";
 import { requireAdmin } from "../../middleware/requireAdmin";
-import { REQUEST_ID_HEADER } from "../../lib/http";
-import { getRequestId } from "../../lib/requestContext";
+import { CORRELATION_ID_HEADER } from "../../lib/http";
+import { getCorrelationId } from "../../middleware/correlation";
 import { indexerService } from "../../services/indexerService";
 import { adminReindexTotal } from "../../metrics/registry";
-import { db } from "../../db";
-import { auditLogs } from "../../db/schema";
+import { createAuditLog } from "../../services/auditService";
 
 // ── Validation schema ────────────────────────────────────────────────────────
 
@@ -57,10 +56,10 @@ export interface AdminReindexRouterOptions {
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
-/** Resolves the request ID from AsyncLocalStorage context, then req.id fallback. */
+/** Resolves the correlation ID from AsyncLocalStorage context, then req.id fallback. */
 function resolveRequestId(req: { id?: unknown }): string {
   return (
-    getRequestId() ??
+    getCorrelationId() ??
     (typeof req.id === "string" ? req.id : "") ??
     ""
   );
@@ -116,23 +115,28 @@ export function createAdminReindexRouter(
    */
   router.post("", async (req, res, next) => {
     try {
-      const requestId = resolveRequestId(req);
+      const correlationId = resolveRequestId(req);
 
       // ── Input validation ─────────────────────────────────────────────────
       const parsed = bodySchema.safeParse(req.body);
       if (!parsed.success) {
-        res.setHeader(REQUEST_ID_HEADER, requestId);
+        res.setHeader(CORRELATION_ID_HEADER, correlationId);
         res.status(400).json({
           error: {
             code: "validation_error",
             details: parsed.error.issues,
-            requestId,
+            correlationId,
           },
         });
         return;
       }
 
       const { ledger: from } = parsed.data;
+
+      // ── Before-state snapshot ─────────────────────────────────────────────
+      // Capture cursor position prior to the backfill so the audit row shows
+      // the full before→after transition.
+      const previousCursor = await indexerService.getCursor();
 
       // ── Backfill ─────────────────────────────────────────────────────────
       // getChainTip() goes to Soroban RPC; backfillRange() is chunked and
@@ -142,22 +146,23 @@ export function createAdminReindexRouter(
 
       // ── Audit log ─────────────────────────────────────────────────────────
       // Written after the backfill so a failed backfill produces no audit row.
-      // The `ip` column is NOT NULL — fall back to "unknown" for programmatic
-      // callers that omit forwarding headers.
+      // beforeState / afterState capture the cursor transition for forensic
+      // traceability.
       const ip = extractClientIp(req as Parameters<typeof extractClientIp>[0]);
-      await db.insert(auditLogs).values({
+      await createAuditLog({
         action: "admin.reindex",
-        walletAddress: req.adminAddress ?? null,
+        walletAddress: req.adminAddress ?? undefined,
         ip,
-        correlationId: requestId,
-        rateLimitContext: null,
+        correlationId,
+        beforeState: { cursor: previousCursor, from },
+        afterState: { cursor: to, from, to },
       });
 
       // ── Metrics & structured log ──────────────────────────────────────────
       adminReindexTotal.inc();
       logger.info(
         {
-          requestId,
+          correlationId,
           adminAddress: req.adminAddress,
           from,
           to,
@@ -166,9 +171,10 @@ export function createAdminReindexRouter(
       );
 
       // ── Response ──────────────────────────────────────────────────────────
-      res.setHeader(REQUEST_ID_HEADER, requestId);
+      res.setHeader(CORRELATION_ID_HEADER, correlationId);
       res.status(200).json({
         data: { from, to },
+        correlationId,
       });
     } catch (error) {
       next(error);

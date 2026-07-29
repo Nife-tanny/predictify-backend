@@ -2,8 +2,8 @@ import { Router } from "express";
 import { rateLimit } from "express-rate-limit";
 import { z } from "zod";
 import { requireAdmin } from "../../middleware/requireAdmin";
-import { REQUEST_ID_HEADER } from "../../lib/http";
-import { getRequestId } from "../../lib/requestContext";
+import { CORRELATION_ID_HEADER } from "../../lib/http";
+import { getCorrelationId } from "../../middleware/correlation";
 import {
   DrizzleFraudRepo,
   type FraudRepo,
@@ -38,7 +38,7 @@ export interface AdminFraudRouterOptions {
 
 function requestIdOf(req: { id?: unknown }): string {
   return (
-    getRequestId() ??
+    getCorrelationId() ??
     (typeof req.id === "string" ? req.id : "") ??
     ""
   );
@@ -69,7 +69,7 @@ export function createAdminFraudRouter(
 
   router.get("/flags", async (req, res, next) => {
     try {
-      const requestId = requestIdOf({ id: (req as { id?: unknown }).id });
+      const correlationId = requestIdOf({ id: (req as { id?: unknown }).id });
       const parsed = listQuerySchema.safeParse(req.query);
       if (!parsed.success) {
         throw RouteErrorFactory.validation(
@@ -77,8 +77,8 @@ export function createAdminFraudRouter(
         );
       }
       const rows = await listFraudFlags(parsed.data, repo);
-      res.setHeader(REQUEST_ID_HEADER, requestId);
-      res.json({ data: rows });
+      res.setHeader(CORRELATION_ID_HEADER, correlationId);
+      res.json({ data: rows, correlationId });
     } catch (e) {
       next(e);
     }
@@ -86,7 +86,7 @@ export function createAdminFraudRouter(
 
   router.post("/scan", async (req, res, next) => {
     try {
-      const requestId = requestIdOf({ id: (req as { id?: unknown }).id });
+      const correlationId = requestIdOf({ id: (req as { id?: unknown }).id });
       const body = req.body ?? {};
       const parsed = scanBodySchema.safeParse(body);
       if (!parsed.success) {
@@ -96,10 +96,10 @@ export function createAdminFraudRouter(
       }
       const result = await runFraudScan(repo, {
         ...parsed.data,
-        correlationId: requestId,
+        correlationId,
       });
-      res.setHeader(REQUEST_ID_HEADER, requestId);
-      res.json({ data: result });
+      res.setHeader(CORRELATION_ID_HEADER, correlationId);
+      res.json({ data: result, correlationId });
     } catch (e) {
       next(e);
     }

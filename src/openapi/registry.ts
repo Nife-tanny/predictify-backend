@@ -3,6 +3,7 @@ import {
   extendZodWithOpenApi,
   OpenAPIRegistry,
 } from "@asteasolutions/zod-to-openapi";
+import { recommendationsQuerySchema } from "../validators/markets";
 
 extendZodWithOpenApi(z);
 
@@ -196,6 +197,7 @@ registry.registerPath({
   tags: ["Auth"],
   summary: "Request a sign-in challenge nonce",
   request: {
+    headers: IdempotencyKeyHeader,
     body: {
       content: {
         "application/json": {
@@ -232,6 +234,10 @@ registry.registerPath({
       description: "Validation error",
       content: { "application/json": { schema: ValidationErrorBody } },
     },
+    409: {
+      description: "Idempotency key conflict",
+      content: { "application/json": { schema: ErrorBody } },
+    },
   },
 });
 
@@ -253,6 +259,7 @@ registry.registerPath({
   tags: ["Auth"],
   summary: "Verify challenge signature and obtain JWT",
   request: {
+    headers: IdempotencyKeyHeader,
     body: {
       content: {
         "application/json": {
@@ -274,7 +281,6 @@ registry.registerPath({
     200: {
       description: "Tokens issued",
       content: {
-        "application/json": {
           schema: TokenPair,
           examples: {
             tokensIssued: {
@@ -295,6 +301,10 @@ registry.registerPath({
       description: "Invalid signature",
       content: { "application/json": { schema: ErrorBody } },
     },
+    409: {
+      description: "Idempotency key conflict",
+      content: { "application/json": { schema: ErrorBody } },
+    },
   },
 });
 
@@ -309,6 +319,7 @@ registry.registerPath({
   tags: ["Auth"],
   summary: "Rotate a refresh token",
   request: {
+    headers: IdempotencyKeyHeader,
     body: {
       content: {
         "application/json": {
@@ -345,11 +356,16 @@ registry.registerPath({
       description: "Missing token",
       content: { "application/json": { schema: ErrorBody } },
     },
+    409: {
+      description: "Idempotency key conflict",
+      content: { "application/json": { schema: ErrorBody } },
+    },
     401: {
       description: "Invalid token",
       content: { "application/json": { schema: ErrorBody } },
     },
     403: {
+      description: "Reuse detected — family revoked",
       description: "Reuse detected \u2014 family revoked",
       content: { "application/json": { schema: ErrorBody } },
     },
@@ -363,6 +379,7 @@ registry.registerPath({
   tags: ["Auth"],
   summary: "Revoke the entire refresh-token family",
   request: {
+    headers: IdempotencyKeyHeader,
     body: {
       content: {
         "application/json": {
@@ -382,6 +399,46 @@ registry.registerPath({
     204: { description: "Logged out" },
     400: {
       description: "Missing token",
+      content: { "application/json": { schema: ErrorBody } },
+    },
+    409: {
+      description: "Idempotency key conflict",
+      content: { "application/json": { schema: ErrorBody } },
+    },
+  },
+});
+
+registry.registerPath({
+  method: "post",
+  path: "/api/auth/wallet/logout",
+  operationId: "authWalletLogout",
+  tags: ["Auth"],
+  summary: "Revoke the entire refresh-token family for wallet logout",
+  request: {
+    headers: IdempotencyKeyHeader,
+    body: {
+      content: {
+        "application/json": {
+          schema: RefreshRequest,
+          examples: {
+            walletLogoutRequest: {
+              value: {
+                refreshToken: "refresh-token-001",
+              },
+            },
+          },
+        },
+      },
+    },
+  },
+  responses: {
+    204: { description: "Wallet logged out" },
+    400: {
+      description: "Missing token",
+      content: { "application/json": { schema: ErrorBody } },
+    },
+    409: {
+      description: "Idempotency key conflict",
       content: { "application/json": { schema: ErrorBody } },
     },
   },
@@ -499,12 +556,15 @@ registry.registerPath({
   tags: ["Markets"],
   summary: "Get personalized market recommendations",
   security: [{ bearerAuth: [] }],
+  request: {
+    query: recommendationsQuerySchema,
+  },
   responses: {
     200: {
-      description: "Array of recommended markets",
+      description: "Paginated list of recommended markets",
       content: {
         "application/json": {
-          schema: z.object({ data: z.array(Market) }),
+          schema: z.object({ data: z.array(Market), nextCursor: z.string().nullable() }),
           examples: {
             recommendedMarkets: {
               value: {
@@ -521,6 +581,7 @@ registry.registerPath({
                     createdAt: "2026-03-01T09:00:00.000Z",
                   },
                 ],
+                nextCursor: null,
               },
             },
           },
@@ -542,6 +603,36 @@ registry.registerPath({
               },
             },
           },
+        },
+      },
+    },
+  },
+});
+
+registry.registerPath({
+  method: "get",
+  path: "/api/recommendations",
+  operationId: "getRecommendations",
+  tags: ["Markets"],
+  summary: "Get personalized market recommendations",
+  security: [{ bearerAuth: [] }],
+  request: {
+    query: recommendationsQuerySchema,
+  },
+  responses: {
+    200: {
+      description: "Paginated list of recommended markets",
+      content: {
+        "application/json": {
+          schema: z.object({ data: z.array(Market), nextCursor: z.string().nullable() }),
+        },
+      },
+    },
+    401: {
+      description: "Unauthorized",
+      content: {
+        "application/json": {
+          schema: ErrorBody,
         },
       },
     },
@@ -1024,6 +1115,55 @@ registry.registerPath({
           },
         },
       },
+    },
+  },
+});
+
+const ClaimRequest = z
+  .object({ marketId: z.string().min(1) })
+  .strict()
+  .openapi("ClaimRequest");
+
+const ClaimResponse = z
+  .object({
+    data: z.object({
+      predictionId: z.string(),
+      result: z.string().nullable(),
+      claimTxHash: z.string().nullable(),
+      claimedAt: z.string().datetime().nullable(),
+    }),
+  })
+  .openapi("ClaimResponse");
+
+registry.registerPath({
+  method: "post",
+  path: "/api/predictions/claim",
+  tags: ["Predictions"],
+  summary: "Claim winnings after market resolution",
+  description:
+    "Builds and submits a Soroban claim transaction for the authenticated user's " +
+    "winning prediction. Idempotent via Idempotency-Key header and internal guard.",
+  security: [{ bearerAuth: [] }],
+  request: {
+    body: { content: { "application/json": { schema: ClaimRequest } } },
+  },
+  responses: {
+    200: {
+      description: "Claim successful (or previously claimed)",
+      content: { "application/json": { schema: ClaimResponse } },
+    },
+    400: {
+      description: "Market not resolved, prediction not winning, or validation error",
+      content: { "application/json": { schema: ErrorBody } },
+    },
+    401: { description: "Unauthorized", content: { "application/json": { schema: ErrorBody } } },
+    404: {
+      description: "Market or prediction not found",
+      content: { "application/json": { schema: ErrorBody } },
+    },
+    500: {
+      description: "Soroban transaction submission failed",
+      content: { "application/json": { schema: ErrorBody } },
     },
   },
 });
@@ -3462,6 +3602,115 @@ registry.registerPath({
           },
         },
       },
+    },
+  },
+});
+
+// ── /api/referrals ───────────────────────────────────────────────────────────
+
+registry.registerPath({
+  method: "post",
+  path: "/api/referrals",
+  operationId: "createReferral",
+  tags: ["Referrals"],
+  summary: "Create a referral code",
+  description: "Creates a new referral code for the authenticated user.",
+  security: [{ bearerAuth: [] }],
+  request: {
+    body: {
+      content: {
+        "application/json": {
+          schema: z.object({
+            campaignId: z.string().optional(),
+          }),
+          examples: {
+            success: {
+              summary: "Create referral request",
+              value: {
+                campaignId: "FWC26",
+              },
+            },
+          },
+        },
+      },
+    },
+  },
+  responses: {
+    201: {
+      description: "Referral created",
+      content: {
+        "application/json": {
+          schema: z.object({
+            data: z.object({
+              referralCode: z.string(),
+              message: z.string(),
+            }),
+          }),
+          examples: {
+            success: {
+              summary: "Referral code created successfully",
+              value: {
+                data: {
+                  referralCode: "REF-ABC-123",
+                  message: "Referral created successfully",
+                },
+              },
+            },
+          },
+        },
+      },
+    },
+    401: {
+      description: "Missing or invalid JWT",
+      content: { "application/json": { schema: ErrorBody } },
+    },
+  },
+});
+
+registry.registerPath({
+  method: "get",
+  path: "/api/referrals",
+  operationId: "listReferrals",
+  tags: ["Referrals"],
+  summary: "List user referrals",
+  description: "Lists all referrals made by the authenticated user.",
+  security: [{ bearerAuth: [] }],
+  responses: {
+    200: {
+      description: "List of referrals",
+      content: {
+        "application/json": {
+          schema: z.object({
+            data: z.array(
+              z.object({
+                id: z.string(),
+                referredUser: z.string(),
+                status: z.enum(["pending", "completed"]),
+                createdAt: z.string().datetime(),
+              })
+            ),
+          }),
+          examples: {
+            success: {
+              summary: "Referral list",
+              value: {
+                data: [
+                  {
+                    id: "ref-001",
+                    referredUser: "GD2...",
+                    status: "completed",
+                    createdAt: "2026-07-28T12:00:00Z",
+                  },
+                ],
+              },
+            },
+          },
+        },
+      },
+    },
+    401: {
+      description: "Missing or invalid JWT",
+      content: { "application/json": { schema: ErrorBody } },
     },
   },
 });

@@ -156,6 +156,11 @@ export const predictions = pgTable("predictions", {
   fundingSource: text("funding_source"),
   status: text("status").notNull().default("pending"),
   result: text("result"),
+  /** Soroban claim transaction hash — populated after the user claims their winnings. */
+  claimTxHash: text("claim_tx_hash"),
+  /** Timestamp when the claim transaction was submitted. Null until claimed. */
+  claimedAt: timestamp("claimed_at", { withTimezone: true }),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   createdAt: timestamp("created_at", { withTimezone: true })
     .notNull()
     .defaultNow(),
@@ -386,6 +391,10 @@ export const auditLogs = pgTable(
     ip: text("ip").notNull(),
     correlationId: text("correlation_id").notNull(),
     rateLimitContext: jsonb("rate_limit_context"),
+    /** Snapshot of the relevant state immediately before the mutating action. */
+    beforeState: jsonb("before_state"),
+    /** Snapshot of the relevant state immediately after the mutating action. */
+    afterState: jsonb("after_state"),
     createdAt: timestamp("created_at", { withTimezone: true })
       .notNull()
       .defaultNow(),

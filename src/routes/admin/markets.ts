@@ -3,6 +3,7 @@ import { rateLimit } from "express-rate-limit";
 import { z } from "zod";
 import { requireAdmin } from "../../middleware/requireAdmin";
 import { logger } from "../../config/logger";
+import { getCorrelationId } from "../../middleware/correlation";
 import {
   featureMarket,
   unfeatureMarket,
@@ -37,7 +38,7 @@ const paramsSchema = z.object({
 });
 
 function requestIdOf(req: { id?: unknown }): string {
-  return typeof req.id === "string" ? req.id : "";
+  return getCorrelationId() ?? (typeof req.id === "string" ? req.id : "") ?? "";
 }
 
 export interface AdminMarketsRouterOptions {

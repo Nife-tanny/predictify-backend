@@ -112,3 +112,28 @@ export function webhookCors(): ReturnType<typeof createCorsAllowlistMiddleware> 
   }
   return webhookCorsMiddleware;
 }
+
+/**
+ * Pre-configured CORS middleware for the markets endpoint.
+ * Reads allowed origins from the `MARKETS_CORS_ALLOWED_ORIGINS` env variable.
+ * When the allowlist is empty, all cross-origin requests to /api/markets are denied.
+ */
+let marketsCorsMiddleware: ReturnType<typeof createCorsAllowlistMiddleware> | null = null;
+
+export function marketsCors(): ReturnType<typeof createCorsAllowlistMiddleware> {
+  if (!marketsCorsMiddleware) {
+    const raw = env.MARKETS_CORS_ALLOWED_ORIGINS ?? "";
+    const allowedOrigins = raw
+      .split(",")
+      .map((o) => o.trim())
+      .filter((o) => o.length > 0);
+    marketsCorsMiddleware = createCorsAllowlistMiddleware({
+      allowedOrigins,
+      allowCredentials: true,
+      maxAgeSeconds: 600,
+    });
+  }
+  return marketsCorsMiddleware;
+}
+
+export const enforceCors = marketsCors();
