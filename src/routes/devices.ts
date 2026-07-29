@@ -5,7 +5,7 @@ import { refreshTokens } from "../db/schema";
 import { requireAuth } from "../middleware/requireAuth";
 import { AuthenticatedRequest } from "../middleware/auth";
 import { logger } from "../config/logger";
-import { listDevicesQuerySchema } from "../validators/devices";
+import { securityHeaders } from "../middleware/securityHeaders";
 
 export interface DeviceSummary {
   id: string;
@@ -15,6 +15,9 @@ export interface DeviceSummary {
 
 export const devicesRouter = Router();
 
+// Apply security headers first — ensures CSP, X-Content-Type-Options, and
+// Referrer-Policy are present on every response including 401/403s.
+devicesRouter.use(securityHeaders);
 devicesRouter.use(requireAuth);
 
 devicesRouter.get(
