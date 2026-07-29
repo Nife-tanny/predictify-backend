@@ -7,6 +7,7 @@ import { logger } from "./config/logger";
 import { metricsMiddleware } from "./metrics/httpMetrics";
 import { metricsHistogramMiddleware } from "./middleware/metricsHistogram";
 import { correlationMiddleware } from "./middleware/correlation";
+import { deprecationMiddleware } from "./middleware/deprecation";
 import { fingerprintMiddleware } from "./middleware/fingerprint";
 import { idempotency } from "./middleware/idempotency";
 import { defaultBodySizeLimitMiddleware, webhookBodySizeLimitMiddleware } from "./middleware/bodySize";
@@ -139,6 +140,7 @@ export function createApp(_options: CreateAppOptions = {}): express.Express {
   // Runs after the ALS context is established so correlationMiddleware can
   // extend the existing store with the `correlationId` field.
   app.use(correlationMiddleware);
+  app.use(deprecationMiddleware);
 
   app.use("/api/admin/webhooks", webhookBodySizeLimitMiddleware);
   app.use(defaultBodySizeLimitMiddleware);
