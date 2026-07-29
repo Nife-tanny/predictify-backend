@@ -137,26 +137,26 @@ export function marketsCors(): ReturnType<typeof createCorsAllowlistMiddleware> 
 }
 
 /**
- * Pre-configured CORS middleware for the audit endpoint.
- * Reads allowed origins from the `AUDIT_CORS_ALLOWED_ORIGINS` env variable.
- * When the allowlist is empty, all cross-origin requests to /api/audit are denied.
+ * Pre-configured CORS middleware for the notifications endpoint.
+ * Reads allowed origins from the `NOTIFICATIONS_CORS_ALLOWED_ORIGINS` env variable.
+ * When the allowlist is empty, all cross-origin requests to /api/notifications are denied.
  */
-let auditCorsMiddleware: ReturnType<typeof createCorsAllowlistMiddleware> | null = null;
+let notificationsCorsMiddleware: ReturnType<typeof createCorsAllowlistMiddleware> | null = null;
 
-export function auditCors(): ReturnType<typeof createCorsAllowlistMiddleware> {
-  if (!auditCorsMiddleware) {
-    const raw = env.AUDIT_CORS_ALLOWED_ORIGINS ?? "";
+export function notificationsCors(): ReturnType<typeof createCorsAllowlistMiddleware> {
+  if (!notificationsCorsMiddleware) {
+    const raw = env.NOTIFICATIONS_CORS_ALLOWED_ORIGINS ?? "";
     const allowedOrigins = raw
       .split(",")
       .map((o) => o.trim())
       .filter((o) => o.length > 0);
-    auditCorsMiddleware = createCorsAllowlistMiddleware({
+    notificationsCorsMiddleware = createCorsAllowlistMiddleware({
       allowedOrigins,
       allowCredentials: true,
       maxAgeSeconds: 600,
     });
   }
-  return auditCorsMiddleware;
+  return notificationsCorsMiddleware;
 }
 
 export const enforceCors = marketsCors();
