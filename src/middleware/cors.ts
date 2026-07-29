@@ -135,3 +135,5 @@ export function marketsCors(): ReturnType<typeof createCorsAllowlistMiddleware> 
   }
   return marketsCorsMiddleware;
 }
+
+export const enforceCors = marketsCors();

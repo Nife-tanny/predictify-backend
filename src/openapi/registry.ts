@@ -3605,3 +3605,112 @@ registry.registerPath({
     },
   },
 });
+
+// ── /api/referrals ───────────────────────────────────────────────────────────
+
+registry.registerPath({
+  method: "post",
+  path: "/api/referrals",
+  operationId: "createReferral",
+  tags: ["Referrals"],
+  summary: "Create a referral code",
+  description: "Creates a new referral code for the authenticated user.",
+  security: [{ bearerAuth: [] }],
+  request: {
+    body: {
+      content: {
+        "application/json": {
+          schema: z.object({
+            campaignId: z.string().optional(),
+          }),
+          examples: {
+            success: {
+              summary: "Create referral request",
+              value: {
+                campaignId: "FWC26",
+              },
+            },
+          },
+        },
+      },
+    },
+  },
+  responses: {
+    201: {
+      description: "Referral created",
+      content: {
+        "application/json": {
+          schema: z.object({
+            data: z.object({
+              referralCode: z.string(),
+              message: z.string(),
+            }),
+          }),
+          examples: {
+            success: {
+              summary: "Referral code created successfully",
+              value: {
+                data: {
+                  referralCode: "REF-ABC-123",
+                  message: "Referral created successfully",
+                },
+              },
+            },
+          },
+        },
+      },
+    },
+    401: {
+      description: "Missing or invalid JWT",
+      content: { "application/json": { schema: ErrorBody } },
+    },
+  },
+});
+
+registry.registerPath({
+  method: "get",
+  path: "/api/referrals",
+  operationId: "listReferrals",
+  tags: ["Referrals"],
+  summary: "List user referrals",
+  description: "Lists all referrals made by the authenticated user.",
+  security: [{ bearerAuth: [] }],
+  responses: {
+    200: {
+      description: "List of referrals",
+      content: {
+        "application/json": {
+          schema: z.object({
+            data: z.array(
+              z.object({
+                id: z.string(),
+                referredUser: z.string(),
+                status: z.enum(["pending", "completed"]),
+                createdAt: z.string().datetime(),
+              })
+            ),
+          }),
+          examples: {
+            success: {
+              summary: "Referral list",
+              value: {
+                data: [
+                  {
+                    id: "ref-001",
+                    referredUser: "GD2...",
+                    status: "completed",
+                    createdAt: "2026-07-28T12:00:00Z",
+                  },
+                ],
+              },
+            },
+          },
+        },
+      },
+    },
+    401: {
+      description: "Missing or invalid JWT",
+      content: { "application/json": { schema: ErrorBody } },
+    },
+  },
+});
