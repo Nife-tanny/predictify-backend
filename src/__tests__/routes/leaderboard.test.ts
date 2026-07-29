@@ -88,6 +88,9 @@ describe("Leaderboard Routes", () => {
         .query({ period: "invalid-period" });
 
       expect(response.status).toBe(400);
+      expect(response.body.error).toBeDefined();
+      expect(response.body.error.code).toBe("validation_error");
+      expect(response.body.error.details).toBeDefined();
     });
 
     it("should accept limit parameter", async () => {
@@ -132,6 +135,7 @@ describe("Leaderboard Routes", () => {
         .query({ limit: -1 });
 
       expect(response.status).toBe(400);
+      expect(response.body.error.code).toBe("validation_error");
     });
 
     it("should reject limit exceeding 100", async () => {
@@ -140,6 +144,7 @@ describe("Leaderboard Routes", () => {
         .query({ limit: 101 });
 
       expect(response.status).toBe(400);
+      expect(response.body.error.code).toBe("validation_error");
     });
 
     it("should reject negative offset", async () => {
@@ -148,6 +153,34 @@ describe("Leaderboard Routes", () => {
         .query({ offset: -1 });
 
       expect(response.status).toBe(400);
+      expect(response.body.error.code).toBe("validation_error");
+    });
+
+    it("should reject limit with decimal value", async () => {
+      const response = await request(app)
+        .get("/api/leaderboard")
+        .query({ limit: 10.5 });
+
+      expect(response.status).toBe(400);
+      expect(response.body.error.code).toBe("validation_error");
+    });
+
+    it("should reject unknown query parameters", async () => {
+      const response = await request(app)
+        .get("/api/leaderboard")
+        .query({ unknownParam: "value" });
+
+      expect(response.status).toBe(400);
+      expect(response.body.error.code).toBe("validation_error");
+    });
+
+    it("should reject offset with decimal value", async () => {
+      const response = await request(app)
+        .get("/api/leaderboard")
+        .query({ offset: 1.5 });
+
+      expect(response.status).toBe(400);
+      expect(response.body.error.code).toBe("validation_error");
     });
 
     it("should support refresh parameter with all-time period", async () => {
@@ -243,6 +276,18 @@ describe("Leaderboard Routes", () => {
       expect(response.body.meta.offset).toBe(50);
       expect(response.body.meta.refresh).toBe(true);
     });
+
+    it("should return structured validation error with code, message, details, and requestId", async () => {
+      const response = await request(app)
+        .get("/api/leaderboard")
+        .query({ limit: -5 });
+
+      expect(response.status).toBe(400);
+      expect(response.body.error).toHaveProperty("code", "validation_error");
+      expect(response.body.error).toHaveProperty("message");
+      expect(response.body.error).toHaveProperty("details");
+      expect(Array.isArray(response.body.error.details)).toBe(true);
+    });
   });
 
   describe("GET /api/leaderboard/user/:stellarAddress", () => {
@@ -301,15 +346,37 @@ describe("Leaderboard Routes", () => {
         .query({ period: "invalid" });
 
       expect(response.status).toBe(400);
+      expect(response.body.error.code).toBe("validation_error");
     });
 
-    it("should return 404 when user not found", async () => {
+    it("should reject invalid stellar address format", async () => {
+      const response = await request(app).get(
+        "/api/leaderboard/user/NOT_A_VALID_ADDRESS",
+      );
+
+      expect(response.status).toBe(400);
+      expect(response.body.error.code).toBe("validation_error");
+      expect(response.body.error.message).toContain("Stellar address");
+    });
+
+    it("should reject stellar address with wrong prefix", async () => {
+      const response = await request(app).get(
+        "/api/leaderboard/user/AHK7EYR7AQ5B56K2RRYUWWC7EJ5CWWWURC2Q4GQRHBDQY7ZLMQVB6TF",
+      );
+
+      expect(response.status).toBe(400);
+      expect(response.body.error.code).toBe("validation_error");
+    });
+
+    it("should return 404 when user not found with valid address", async () => {
+      const validAddress =
+        "GAQQV3Q3YZ7GXQFX3WQ5RZ5K5Y5Q5X5X5X5X5X5X5X5X5X5X5X5X5X5X5";
       (
         leaderboardService.getUserLeaderboardEntry as jest.Mock
       ).mockResolvedValueOnce(null);
 
       const response = await request(app).get(
-        "/api/leaderboard/user/UNKNOWN_ADDRESS",
+        `/api/leaderboard/user/${validAddress}`,
       );
 
       expect(response.status).toBe(404);
@@ -347,6 +414,15 @@ describe("Leaderboard Routes", () => {
         altAddress,
         "all-time",
       );
+    });
+
+    it("should reject unknown query parameters on user endpoint", async () => {
+      const response = await request(app)
+        .get(`/api/leaderboard/user/${mockLeaderboardEntry.stellar_address}`)
+        .query({ unknownParam: "value" });
+
+      expect(response.status).toBe(400);
+      expect(response.body.error.code).toBe("validation_error");
     });
   });
 
@@ -391,4 +467,3 @@ describe("Leaderboard Routes", () => {
     });
   });
 });
-
