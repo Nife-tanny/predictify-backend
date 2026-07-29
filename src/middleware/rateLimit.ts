@@ -31,6 +31,7 @@ import {
   type RateLimitContext,
 } from "../services/auditService";
 import { env } from "../config/env";
+import { logger } from "../config/logger";
 
 declare global {
   namespace Express {
