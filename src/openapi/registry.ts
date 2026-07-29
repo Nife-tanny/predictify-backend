@@ -3,6 +3,7 @@ import {
   extendZodWithOpenApi,
   OpenAPIRegistry,
 } from "@asteasolutions/zod-to-openapi";
+import { recommendationsQuerySchema } from "../validators/markets";
 
 extendZodWithOpenApi(z);
 
@@ -196,6 +197,7 @@ registry.registerPath({
   tags: ["Auth"],
   summary: "Request a sign-in challenge nonce",
   request: {
+    headers: IdempotencyKeyHeader,
     body: {
       content: {
         "application/json": {
@@ -232,6 +234,10 @@ registry.registerPath({
       description: "Validation error",
       content: { "application/json": { schema: ValidationErrorBody } },
     },
+    409: {
+      description: "Idempotency key conflict",
+      content: { "application/json": { schema: ErrorBody } },
+    },
   },
 });
 
@@ -253,6 +259,7 @@ registry.registerPath({
   tags: ["Auth"],
   summary: "Verify challenge signature and obtain JWT",
   request: {
+    headers: IdempotencyKeyHeader,
     body: {
       content: {
         "application/json": {
@@ -274,7 +281,6 @@ registry.registerPath({
     200: {
       description: "Tokens issued",
       content: {
-        "application/json": {
           schema: TokenPair,
           examples: {
             tokensIssued: {
@@ -295,6 +301,10 @@ registry.registerPath({
       description: "Invalid signature",
       content: { "application/json": { schema: ErrorBody } },
     },
+    409: {
+      description: "Idempotency key conflict",
+      content: { "application/json": { schema: ErrorBody } },
+    },
   },
 });
 
@@ -309,6 +319,7 @@ registry.registerPath({
   tags: ["Auth"],
   summary: "Rotate a refresh token",
   request: {
+    headers: IdempotencyKeyHeader,
     body: {
       content: {
         "application/json": {
@@ -345,11 +356,16 @@ registry.registerPath({
       description: "Missing token",
       content: { "application/json": { schema: ErrorBody } },
     },
+    409: {
+      description: "Idempotency key conflict",
+      content: { "application/json": { schema: ErrorBody } },
+    },
     401: {
       description: "Invalid token",
       content: { "application/json": { schema: ErrorBody } },
     },
     403: {
+      description: "Reuse detected — family revoked",
       description: "Reuse detected \u2014 family revoked",
       content: { "application/json": { schema: ErrorBody } },
     },
@@ -363,6 +379,7 @@ registry.registerPath({
   tags: ["Auth"],
   summary: "Revoke the entire refresh-token family",
   request: {
+    headers: IdempotencyKeyHeader,
     body: {
       content: {
         "application/json": {
@@ -383,6 +400,113 @@ registry.registerPath({
     400: {
       description: "Missing token",
       content: { "application/json": { schema: ErrorBody } },
+    },
+    409: {
+      description: "Idempotency key conflict",
+      content: { "application/json": { schema: ErrorBody } },
+    },
+  },
+});
+
+registry.registerPath({
+  method: "post",
+  path: "/api/auth/wallet/logout",
+  operationId: "authWalletLogout",
+  tags: ["Auth"],
+  summary: "Revoke the entire refresh-token family for wallet logout",
+  request: {
+    headers: IdempotencyKeyHeader,
+    body: {
+      content: {
+        "application/json": {
+          schema: RefreshRequest,
+          examples: {
+            walletLogoutRequest: {
+              value: {
+                refreshToken: "refresh-token-001",
+              },
+            },
+          },
+        },
+      },
+    },
+  },
+  responses: {
+    204: { description: "Wallet logged out" },
+    400: {
+      description: "Missing token",
+      content: { "application/json": { schema: ErrorBody } },
+    },
+    409: {
+      description: "Idempotency key conflict",
+      content: { "application/json": { schema: ErrorBody } },
+    },
+  },
+});
+
+// ── GET /api/auth/health ────────────────────────────────────────────────────
+
+const AuthHealthResponse = z
+  .object({
+    status: z.enum(["ok", "down"]),
+    correlationId: z.string(),
+    checkedAt: z.string().datetime(),
+    dependencies: z.object({
+      database: z.object({
+        status: z.enum(["ok", "down"]),
+        latencyMs: z.number(),
+        error: z.string().optional(),
+      }),
+    }),
+  })
+  .openapi("AuthHealthResponse");
+
+registry.registerPath({
+  method: "get",
+  path: "/api/auth/health",
+  operationId: "authHealth",
+  tags: ["Health"],
+  summary: "Health probe for /api/auth dependencies",
+  description:
+    "Probes the Postgres database used by auth operations (challenge store, " +
+    "refresh-token store). No authentication required.",
+  responses: {
+    200: {
+      description: "Auth service dependencies are healthy",
+      content: { "application/json": { schema: AuthHealthResponse } },
+    },
+    503: {
+      description: "Database probe failed",
+      content: { "application/json": { schema: AuthHealthResponse } },
+    },
+  },
+});
+
+// ── /api/health/version ──────────────────────────────────────────────────────
+
+const HealthVersionResponse = z
+  .object({
+    version: z.string(),
+    commitSha: z.string(),
+    correlationId: z.string(),
+    checkedAt: z.string().datetime(),
+  })
+  .openapi("HealthVersionResponse");
+
+registry.registerPath({
+  method: "get",
+  path: "/api/health/version",
+  operationId: "healthVersion",
+  tags: ["Health"],
+  summary: "Application version and build info",
+  description:
+    "Returns the application version (from package.json) and the current Git " +
+    "commit SHA (from GIT_COMMIT_SHA or VERCEL_GIT_COMMIT_SHA env vars, " +
+    "falling back to 'unknown'). No authentication required.",
+  responses: {
+    200: {
+      description: "Version information",
+      content: { "application/json": { schema: HealthVersionResponse } },
     },
   },
 });
@@ -432,16 +556,85 @@ registry.registerPath({
   tags: ["Markets"],
   summary: "Get personalized market recommendations",
   security: [{ bearerAuth: [] }],
+  request: {
+    query: recommendationsQuerySchema,
+  },
   responses: {
     200: {
-      description: "Array of recommended markets",
+      description: "Paginated list of recommended markets",
       content: {
-        "application/json": { schema: z.object({ data: z.array(Market) }) },
+        "application/json": {
+          schema: z.object({ data: z.array(Market), nextCursor: z.string().nullable() }),
+          examples: {
+            recommendedMarkets: {
+              value: {
+                data: [
+                  {
+                    id: "market-003",
+                    question: "Will Bitcoin close above $100k in 2026?",
+                    status: "active",
+                    metadata: {
+                      category: "crypto",
+                      resolutionSource: "official",
+                    },
+                    version: 1,
+                    createdAt: "2026-03-01T09:00:00.000Z",
+                  },
+                ],
+                nextCursor: null,
+              },
+            },
+          },
+        },
       },
     },
     401: {
       description: "Unauthorized",
-      content: { "application/json": { schema: ErrorBody } },
+      content: {
+        "application/json": {
+          schema: ErrorBody,
+          examples: {
+            unauthorized: {
+              value: {
+                error: {
+                  code: "unauthorized",
+                  requestId: "req_abc123",
+                },
+              },
+            },
+          },
+        },
+      },
+    },
+  },
+});
+
+registry.registerPath({
+  method: "get",
+  path: "/api/recommendations",
+  operationId: "getRecommendations",
+  tags: ["Markets"],
+  summary: "Get personalized market recommendations",
+  security: [{ bearerAuth: [] }],
+  request: {
+    query: recommendationsQuerySchema,
+  },
+  responses: {
+    200: {
+      description: "Paginated list of recommended markets",
+      content: {
+        "application/json": {
+          schema: z.object({ data: z.array(Market), nextCursor: z.string().nullable() }),
+        },
+      },
+    },
+    401: {
+      description: "Unauthorized",
+      content: {
+        "application/json": {
+          schema: ErrorBody,
+        },
+      },
     },
   },
 });
@@ -512,12 +705,66 @@ registry.registerPath({
     200: {
       description: "Search results",
       content: {
-        "application/json": { schema: MarketSearchResult },
+        "application/json": {
+          schema: MarketSearchResult,
+          examples: {
+            searchResults: {
+              value: {
+                data: [
+                  {
+                    id: "market-001",
+                    question: "Will the US win the 2026 FIFA World Cup?",
+                    status: "active",
+                    metadata: {
+                      category: "sports",
+                      resolutionSource: "official",
+                    },
+                    version: 1,
+                    createdAt: "2026-01-10T12:00:00.000Z",
+                  },
+                ],
+                total: 1,
+                limit: 20,
+                offset: 0,
+                page: 1,
+                fallback: false,
+                pagination: {
+                  limit: 20,
+                  offset: 0,
+                  page: 1,
+                  total: 1,
+                  fallback: false,
+                },
+                meta: {
+                  limit: 20,
+                  offset: 0,
+                  page: 1,
+                  total: 1,
+                  fallback: false,
+                },
+              },
+            },
+          },
+        },
       },
     },
     400: {
       description: "Missing query parameter",
-      content: { "application/json": { schema: ErrorBody } },
+      content: {
+        "application/json": {
+          schema: ErrorBody,
+          examples: {
+            missingQuery: {
+              value: {
+                error: {
+                  code: "validation_error",
+                  requestId: "req_abc123",
+                },
+              },
+            },
+          },
+        },
+      },
     },
   },
 });
@@ -541,6 +788,17 @@ registry.registerPath({
               }),
             ),
           }),
+          examples: {
+            tagCounts: {
+              value: {
+                data: [
+                  { tag: "sports", count: 42 },
+                  { tag: "crypto", count: 17 },
+                  { tag: "technology", count: 9 },
+                ],
+              },
+            },
+          },
         },
       },
     },
@@ -628,28 +886,155 @@ registry.registerPath({
   security: [{ bearerAuth: [] }],
   request: {
     params: z.object({ id: z.string() }),
-    body: { content: { "application/json": { schema: PatchMarketRequest } } },
+    body: {
+      content: {
+        "application/json": {
+          schema: PatchMarketRequest,
+          examples: {
+            updateQuestion: {
+              value: {
+                question: "Will the US win the 2026 FIFA World Cup Final?",
+                metadata: { category: "sports" },
+                expectedVersion: 1,
+              },
+            },
+          },
+        },
+      },
+    },
   },
   responses: {
     200: {
       description: "Updated market",
-      content: { "application/json": { schema: z.object({ data: Market }) } },
+      content: {
+        "application/json": {
+          schema: z.object({ data: Market }),
+          examples: {
+            updatedMarket: {
+              value: {
+                data: {
+                  id: "market-001",
+                  question: "Will the US win the 2026 FIFA World Cup Final?",
+                  status: "active",
+                  metadata: { category: "sports" },
+                  version: 2,
+                  createdAt: "2026-01-10T12:00:00.000Z",
+                },
+              },
+            },
+          },
+        },
+      },
+    },
+    400: {
+      description: "Validation error",
+      content: {
+        "application/json": {
+          schema: ValidationErrorBody,
+          examples: {
+            invalidBody: {
+              value: {
+                error: {
+                  code: "validation_error",
+                  details: [
+                    {
+                      path: ["expectedVersion"],
+                      message: "expectedVersion is required",
+                    },
+                  ],
+                },
+              },
+            },
+          },
+        },
+      },
+    },
+    404: {
+      description: "Not found",
+      content: {
+        "application/json": {
+          schema: ErrorBody,
+          examples: {
+            notFound: {
+              value: {
+                error: {
+                  code: "not_found",
+                  requestId: "req_abc123",
+                },
+              },
+            },
+          },
+        },
+      },
+    },
+    409: {
+      description: "Version conflict",
+      content: {
+        "application/json": {
+          schema: ErrorBody,
+          examples: {
+            versionConflict: {
+              value: {
+                error: {
+                  code: "conflict",
+                  requestId: "req_abc123",
+                },
+              },
+            },
+          },
+        },
+      },
+    },
+  },
+});
+
+// ── /api/markets/{id}/comments ───────────────────────────────────────────────
+
+const MarketComment = z
+  .object({
+    id: z.string().uuid(),
+    marketId: z.string(),
+    authorId: z.string().uuid().nullable(),
+    authorAddress: z.string().nullable(),
+    body: z.string(),
+    moderationFlagged: z.boolean(),
+    moderationReason: z.string().nullable(),
+    createdAt: z.string().datetime(),
+  })
+  .openapi("MarketComment");
+
+registry.registerPath({
+  method: "get",
+  path: "/api/markets/{id}/comments",
+  tags: ["Markets"],
+  summary: "List comments for a market with cursor pagination",
+  request: {
+    params: z.object({ id: z.string() }),
+    query: z.object({
+      limit: z.coerce.number().int().positive().optional().default(20),
+      cursor: z.string().optional(),
+    }),
+  },
+  responses: {
+    200: {
+      description: "Paginated comments list",
+      content: {
+        "application/json": {
+          schema: z.object({
+            data: z.array(MarketComment),
+            nextCursor: z.string().nullable(),
+          }),
+        },
+      },
     },
     400: {
       description: "Validation error",
       content: { "application/json": { schema: ValidationErrorBody } },
     },
-    404: {
-      description: "Not found",
-      content: { "application/json": { schema: ErrorBody } },
-    },
-    409: {
-      description: "Version conflict",
-      content: { "application/json": { schema: ErrorBody } },
-    },
   },
 });
 
+// ── /api/markets/{id}/disputes ───────────────────────────────────────────────
 // ── /api/markets/{id}/prediction-count ───────────────────────────────────────
 
 const PredictionCountResponse = z
@@ -677,14 +1062,107 @@ registry.registerPath({
   responses: {
     200: {
       description: "Prediction count",
-      content: { "application/json": { schema: PredictionCountResponse } },
+      content: {
+        "application/json": {
+          schema: PredictionCountResponse,
+          examples: {
+            predictionCount: {
+              value: {
+                data: {
+                  marketId: "market-001",
+                  count: 128,
+                  computedAt: "2026-06-27T12:00:00.000Z",
+                  cached: true,
+                },
+              },
+            },
+          },
+        },
+      },
     },
     400: {
       description: "Validation error",
-      content: { "application/json": { schema: ValidationErrorBody } },
+      content: {
+        "application/json": {
+          schema: ValidationErrorBody,
+          examples: {
+            invalidId: {
+              value: {
+                error: {
+                  code: "validation_error",
+                  details: [{ path: ["id"], message: "Market ID is required" }],
+                },
+              },
+            },
+          },
+        },
+      },
     },
     404: {
       description: "Market not found",
+      content: {
+        "application/json": {
+          schema: ErrorBody,
+          examples: {
+            notFound: {
+              value: {
+                error: {
+                  code: "not_found",
+                  requestId: "req_abc123",
+                },
+              },
+            },
+          },
+        },
+      },
+    },
+  },
+});
+
+const ClaimRequest = z
+  .object({ marketId: z.string().min(1) })
+  .strict()
+  .openapi("ClaimRequest");
+
+const ClaimResponse = z
+  .object({
+    data: z.object({
+      predictionId: z.string(),
+      result: z.string().nullable(),
+      claimTxHash: z.string().nullable(),
+      claimedAt: z.string().datetime().nullable(),
+    }),
+  })
+  .openapi("ClaimResponse");
+
+registry.registerPath({
+  method: "post",
+  path: "/api/predictions/claim",
+  tags: ["Predictions"],
+  summary: "Claim winnings after market resolution",
+  description:
+    "Builds and submits a Soroban claim transaction for the authenticated user's " +
+    "winning prediction. Idempotent via Idempotency-Key header and internal guard.",
+  security: [{ bearerAuth: [] }],
+  request: {
+    body: { content: { "application/json": { schema: ClaimRequest } } },
+  },
+  responses: {
+    200: {
+      description: "Claim successful (or previously claimed)",
+      content: { "application/json": { schema: ClaimResponse } },
+    },
+    400: {
+      description: "Market not resolved, prediction not winning, or validation error",
+      content: { "application/json": { schema: ErrorBody } },
+    },
+    401: { description: "Unauthorized", content: { "application/json": { schema: ErrorBody } } },
+    404: {
+      description: "Market or prediction not found",
+      content: { "application/json": { schema: ErrorBody } },
+    },
+    500: {
+      description: "Soroban transaction submission failed",
       content: { "application/json": { schema: ErrorBody } },
     },
   },
@@ -799,6 +1277,58 @@ registry.registerPath({
   },
 });
 
+const RateLimitAuditEntry = z
+  .object({
+    id: z.string().uuid(),
+    action: z.literal("rate_limit.blocked"),
+    walletAddress: z.string().nullable(),
+    ip: z.string(),
+    correlationId: z.string(),
+    rateLimitContext: z.unknown().nullable(),
+    createdAt: z.string().datetime(),
+  })
+  .openapi("RateLimitAuditEntry");
+
+registry.registerPath({
+  method: "get",
+  path: "/api/rate-limit",
+  operationId: "listRateLimitEvents",
+  tags: ["Rate Limiting"],
+  summary: "List rate-limit audit events (admin only)",
+  security: [{ bearerAuth: [] }],
+  request: {
+    query: z.object({
+      cursor: z.string().optional(),
+      limit: z.coerce.number().int().positive().optional(),
+    }),
+  },
+  responses: {
+    200: {
+      description: "Paginated rate-limit audit log",
+      content: {
+        "application/json": {
+          schema: z.object({
+            data: z.array(RateLimitAuditEntry),
+            nextCursor: z.string().nullable(),
+          }),
+        },
+      },
+    },
+    400: {
+      description: "Invalid query parameters",
+      content: { "application/json": { schema: ErrorBody } },
+    },
+    401: {
+      description: "Unauthorized",
+      content: { "application/json": { schema: ErrorBody } },
+    },
+    403: {
+      description: "Forbidden",
+      content: { "application/json": { schema: ErrorBody } },
+    },
+  },
+});
+
 // ── /api/markets/featured ────────────────────────────────────────────────────
 
 registry.registerPath({
@@ -818,12 +1348,45 @@ registry.registerPath({
       content: {
         "application/json": {
           schema: z.object({ data: z.array(FeaturedMarket) }),
+          examples: {
+            featuredMarkets: {
+              value: {
+                data: [
+                  {
+                    id: "market-001",
+                    question: "Will the US win the 2026 FIFA World Cup?",
+                    status: "active",
+                    resolutionOutcome: null,
+                    resolutionTime: "2026-07-19T00:00:00.000Z",
+                    winningOutcome: null,
+                    metadata: { category: "sports" },
+                    featuredAt: "2026-06-20T08:00:00.000Z",
+                    featuredBy: "GADMIN1234567890DEFGHIJKLMNOPQRSTUV",
+                  },
+                ],
+              },
+            },
+          },
         },
       },
     },
     400: {
       description: "Invalid query parameters",
-      content: { "application/json": { schema: ErrorBody } },
+      content: {
+        "application/json": {
+          schema: ErrorBody,
+          examples: {
+            invalidLimit: {
+              value: {
+                error: {
+                  code: "validation_error",
+                  requestId: "req_abc123",
+                },
+              },
+            },
+          },
+        },
+      },
     },
   },
 });
@@ -866,6 +1429,68 @@ registry.registerPath({
     429: {
       description: "Rate limit exceeded",
       content: { "application/json": { schema: ErrorBody } },
+    },
+  },
+});
+
+const ForceResolveResponse = z
+  .object({
+    marketId: z.string(),
+    winningOutcome: z.string(),
+    forceResolved: z.literal(true),
+  })
+  .openapi("ForceResolveResponse");
+
+registry.registerPath({
+  method: "post",
+  path: "/api/admin/force-resolve/{id}",
+  operationId: "forceResolveAdmin",
+  tags: ["Admin"],
+  summary: "Force-resolve a stuck market (admin only, idempotent)",
+  security: [{ bearerAuth: [] }],
+  request: {
+    params: z.object({ id: z.string() }),
+    body: {
+      content: {
+        "application/json": {
+          schema: z.object({
+            winningOutcome: z.string().min(1).openapi({
+              description: "The outcome to set as the winner",
+              example: "yes",
+            }),
+          }),
+        },
+      },
+    },
+  },
+  responses: {
+    200: {
+      description: "Market force-resolved successfully",
+      content: {
+        "application/json": {
+          schema: z.object({ data: ForceResolveResponse }),
+        },
+      },
+    },
+    400: {
+      description: "Validation error — missing or invalid winningOutcome",
+      content: { "application/json": { schema: ValidationErrorBody } },
+    },
+    403: {
+      description: "Forbidden — missing or invalid admin JWT",
+      content: { "application/json": { schema: ErrorBody } },
+    },
+    404: {
+      description: "Market not found",
+      content: { "application/json": { schema: ErrorBody } },
+    },
+    409: {
+      description: "Market already resolved or force-finalized",
+      content: { "application/json": { schema: ErrorBody } },
+    },
+    422: {
+      description: "Market has not yet reached its resolution deadline",
+      content: { "application/json": { schema: ValidationErrorBody } },
     },
   },
 });
@@ -1308,14 +1933,112 @@ const FollowResult = z
 
 registry.registerPath({
   method: "get",
+  path: "/api/users",
+  operationId: "listUsers",
+  tags: ["Users"],
+  summary: "List all users (cursor-paginated)",
+  description:
+    "Returns a cursor-paginated list of registered users sorted newest-first " +
+    "(DESC createdAt, DESC id).  Pass the opaque `nextCursor` value from one " +
+    "response as the `cursor` query parameter of the next request to advance " +
+    "through pages.  A null `nextCursor` indicates the last page. " +
+    "Supports strong ETag / conditional GET: send the ETag back as If-None-Match " +
+    "on subsequent requests; if the page is unchanged the server responds 304 Not Modified (no body).",
+  request: {
+    query: z.object({
+      cursor: z.string().optional().openapi({
+        description: "Opaque cursor token from the previous page's nextCursor field.",
+        example: "djF8MjZ8MjAyNi0wMS0wMVQwMDowMDowMC4wMDBafGFiY2Qtd...",
+      }),
+      limit: z.coerce
+        .number()
+        .int()
+        .min(1)
+        .max(100)
+        .default(20)
+        .openapi({ description: "Page size (1–100, default 20)." }),
+    }),
+    headers: z.object({
+      "if-none-match": z.string().optional().openapi({
+        description: "ETag from a previous 200 response. Triggers 304 when the page is unchanged.",
+        param: { name: "If-None-Match", in: "header" },
+      }),
+    }),
+  },
+  responses: {
+    200: {
+      description: "Paginated list of users",
+      headers: {
+        ETag: {
+          description: "Strong ETag (SHA-256) of the response body.",
+          schema: { type: "string" },
+        },
+        "Cache-Control": {
+          description: "Always no-cache so clients revalidate before reuse.",
+          schema: { type: "string", example: "no-cache" },
+        },
+      },
+      content: {
+        "application/json": {
+          schema: z.object({
+            data: z.array(
+              z
+                .object({
+                  id: z.string().uuid(),
+                  stellarAddress: z.string(),
+                  createdAt: z.string().datetime(),
+                })
+                .openapi("UserListRow"),
+            ),
+            nextCursor: z.string().nullable().openapi({
+              description: "Cursor for the next page, or null on the last page.",
+            }),
+          }),
+        },
+      },
+    },
+    304: {
+      description: "Not Modified — page unchanged since the ETag in If-None-Match.",
+    },
+    400: {
+      description: "Validation error",
+      content: { "application/json": { schema: ValidationErrorBody } },
+    },
+  },
+});
+
+registry.registerPath({
+  method: "get",
   path: "/api/users/me",
   operationId: "getCurrentUser",
   tags: ["Users"],
   summary: "Get the authenticated user\u2019s profile",
+  description:
+    "Returns the authenticated user's profile. Supports strong ETag / conditional GET: " +
+    "send the ETag back as If-None-Match on subsequent requests; if the profile is unchanged " +
+    "the server responds 304 Not Modified (no body).",
   security: [{ bearerAuth: [] }],
+  request: {
+    headers: z.object({
+      "if-none-match": z.string().optional().openapi({
+        description: "ETag from a previous 200 response. Triggers 304 when content is unchanged.",
+        param: { name: "If-None-Match", in: "header" },
+      }),
+    }),
+  },
   responses: {
     200: {
       description: "Current user profile",
+      headers: {
+        ETag: {
+          description: "Strong ETag (SHA-256) of the response body.",
+          schema: { type: "string" },
+        },
+        "Cache-Control": {
+          description: "Always no-cache so clients revalidate before reuse.",
+          schema: { type: "string", example: "no-cache" },
+        },
+      },
       content: {
         "application/json": {
           schema: z.object({ data: CurrentUserProfile }),
@@ -1336,9 +2059,26 @@ registry.registerPath({
         },
       },
     },
+    304: {
+      description: "Not Modified — profile unchanged since the ETag in If-None-Match.",
+    },
     401: {
       description: "Unauthorized",
-      content: { "application/json": { schema: ErrorBody } },
+      content: {
+        "application/json": {
+          schema: ErrorBody,
+          examples: {
+            unauthorized: {
+              value: {
+                error: {
+                  code: "UNAUTHORIZED",
+                  requestId: "req_xyz789",
+                },
+              },
+            },
+          },
+        },
+      },
     },
   },
 });
@@ -1349,6 +2089,9 @@ registry.registerPath({
   operationId: "getUserPredictions",
   tags: ["Users"],
   summary: "List predictions for a Stellar address",
+  description:
+    "Returns a cursor-paginated list of predictions. Supports strong ETag / conditional GET: " +
+    "send the ETag back as If-None-Match; if the page is unchanged the server responds 304 Not Modified (no body).",
   request: {
     params: z.object({ address: z.string() }),
     query: z.object({
@@ -1356,10 +2099,26 @@ registry.registerPath({
       cursor: z.string().optional(),
       limit: z.coerce.number().int().min(1).max(100).default(20),
     }),
+    headers: z.object({
+      "if-none-match": z.string().optional().openapi({
+        description: "ETag from a previous 200 response. Triggers 304 when the page is unchanged.",
+        param: { name: "If-None-Match", in: "header" },
+      }),
+    }),
   },
   responses: {
     200: {
       description: "Paginated predictions",
+      headers: {
+        ETag: {
+          description: "Strong ETag (SHA-256) of the response body.",
+          schema: { type: "string" },
+        },
+        "Cache-Control": {
+          description: "Always no-cache so clients revalidate before reuse.",
+          schema: { type: "string", example: "no-cache" },
+        },
+      },
       content: {
         "application/json": {
           schema: z.object({
@@ -1384,13 +2143,44 @@ registry.registerPath({
         },
       },
     },
+    304: {
+      description: "Not Modified — predictions page unchanged since the ETag in If-None-Match.",
+    },
     400: {
       description: "Invalid address",
-      content: { "application/json": { schema: ErrorBody } },
+      content: {
+        "application/json": {
+          schema: ErrorBody,
+          examples: {
+            invalidAddress: {
+              value: {
+                error: {
+                  code: "invalid_address",
+                  requestId: "req_abc123",
+                },
+              },
+            },
+          },
+        },
+      },
     },
     404: {
       description: "User not found",
-      content: { "application/json": { schema: ErrorBody } },
+      content: {
+        "application/json": {
+          schema: ErrorBody,
+          examples: {
+            notFound: {
+              value: {
+                error: {
+                  code: "not_found",
+                  requestId: "req_abc123",
+                },
+              },
+            },
+          },
+        },
+      },
     },
   },
 });
@@ -1401,10 +2191,31 @@ registry.registerPath({
   operationId: "getUserProfile",
   tags: ["Users"],
   summary: "Get a user\u2019s public profile",
-  request: { params: z.object({ stellarAddress: z.string() }) },
+  description:
+    "Returns a public user profile. Supports strong ETag / conditional GET: " +
+    "send the ETag back as If-None-Match; if the profile is unchanged the server responds 304 Not Modified (no body).",
+  request: {
+    params: z.object({ stellarAddress: z.string() }),
+    headers: z.object({
+      "if-none-match": z.string().optional().openapi({
+        description: "ETag from a previous 200 response. Triggers 304 when the profile is unchanged.",
+        param: { name: "If-None-Match", in: "header" },
+      }),
+    }),
+  },
   responses: {
     200: {
       description: "User profile",
+      headers: {
+        ETag: {
+          description: "Strong ETag (SHA-256) of the response body.",
+          schema: { type: "string" },
+        },
+        "Cache-Control": {
+          description: "Always no-cache so clients revalidate before reuse.",
+          schema: { type: "string", example: "no-cache" },
+        },
+      },
       content: {
         "application/json": {
           schema: z.object({ data: UserProfile }),
@@ -1436,11 +2247,39 @@ registry.registerPath({
     },
     400: {
       description: "Invalid Stellar address",
-      content: { "application/json": { schema: ErrorBody } },
+      content: {
+        "application/json": {
+          schema: ErrorBody,
+          examples: {
+            invalidAddress: {
+              value: {
+                error: {
+                  code: "validation_error",
+                  requestId: "req_xyz789",
+                },
+              },
+            },
+          },
+        },
+      },
     },
     404: {
       description: "User not found",
-      content: { "application/json": { schema: ErrorBody } },
+      content: {
+        "application/json": {
+          schema: ErrorBody,
+          examples: {
+            notFound: {
+              value: {
+                error: {
+                  code: "not_found",
+                  requestId: "req_xyz789",
+                },
+              },
+            },
+          },
+        },
+      },
     },
   },
 });
@@ -1519,7 +2358,7 @@ registry.registerPath({
         "application/json": {
           schema: PredictionsListResponse,
           examples: {
-            success: {
+            authenticatedPredictionsPage: {
               value: {
                 data: [
                   {
@@ -1611,11 +2450,39 @@ registry.registerPath({
     },
     400: {
       description: "Validation error",
-      content: { "application/json": { schema: ValidationErrorBody } },
+      content: {
+        "application/json": {
+          schema: ValidationErrorBody,
+          examples: {
+            validationError: {
+              value: {
+                error: {
+                  code: "VALIDATION_ERROR",
+                  details: "Invalid stellar address",
+                },
+              },
+            },
+          },
+        },
+      },
     },
     401: {
       description: "Unauthorized",
-      content: { "application/json": { schema: ErrorBody } },
+      content: {
+        "application/json": {
+          schema: ErrorBody,
+          examples: {
+            unauthorized: {
+              value: {
+                error: {
+                  code: "UNAUTHORIZED",
+                  requestId: "req_xyz789",
+                },
+              },
+            },
+          },
+        },
+      },
     },
   },
 });
@@ -1650,11 +2517,39 @@ registry.registerPath({
     },
     400: {
       description: "Validation error",
-      content: { "application/json": { schema: ValidationErrorBody } },
+      content: {
+        "application/json": {
+          schema: ValidationErrorBody,
+          examples: {
+            validationError: {
+              value: {
+                error: {
+                  code: "VALIDATION_ERROR",
+                  details: "Invalid stellar address",
+                },
+              },
+            },
+          },
+        },
+      },
     },
     401: {
       description: "Unauthorized",
-      content: { "application/json": { schema: ErrorBody } },
+      content: {
+        "application/json": {
+          schema: ErrorBody,
+          examples: {
+            unauthorized: {
+              value: {
+                error: {
+                  code: "UNAUTHORIZED",
+                  requestId: "req_xyz789",
+                },
+              },
+            },
+          },
+        },
+      },
     },
   },
 });
@@ -1816,6 +2711,63 @@ registry.registerPath({
     400: {
       description: "Validation error",
       content: { "application/json": { schema: ValidationErrorBody } },
+    },
+    401: {
+      description: "Unauthorized",
+      content: { "application/json": { schema: ErrorBody } },
+    },
+    403: {
+      description: "Forbidden",
+      content: { "application/json": { schema: ErrorBody } },
+    },
+    429: {
+      description: "Rate limit exceeded",
+      content: { "application/json": { schema: ErrorBody } },
+    },
+  },
+});
+
+// ── /api/audit/counts ───────────────────────────────────────────────────────
+
+const AuditActionCount = z
+  .object({
+    action: z.string(),
+    count: z.number().int(),
+  })
+  .openapi("AuditActionCount");
+
+const AuditCountsSummary = z
+  .object({
+    totalCount: z.number().int(),
+    byAction: z.array(AuditActionCount),
+  })
+  .openapi("AuditCountsSummary");
+
+registry.registerPath({
+  method: "get",
+  path: "/api/audit/counts",
+  operationId: "getAuditCounts",
+  tags: ["Admin"],
+  summary: "Per-action audit log counts summary for dashboards (admin only)",
+  security: [{ bearerAuth: [] }],
+  request: {
+    query: z.object({
+      startDate: z.string().datetime().optional(),
+      endDate: z.string().datetime().optional(),
+    }),
+  },
+  responses: {
+    200: {
+      description: "Audit log counts summary",
+      content: {
+        "application/json": {
+          schema: z.object({ data: AuditCountsSummary }),
+        },
+      },
+    },
+    400: {
+      description: "Invalid query parameters",
+      content: { "application/json": { schema: ErrorBody } },
     },
     401: {
       description: "Unauthorized",
@@ -2187,214 +3139,269 @@ registry.registerPath({
   },
 });
 
-// ── /api/quota/requests ──────────────────────────────────────────────────
+// ── /api/admin/recon ─────────────────────────────────────────────────────────
 
-const QuotaType = z.enum(["prediction_limit", "daily_prediction_limit", "claim_limit"]).openapi("QuotaType");
-
-const CreateQuotaRequestSchema = z
+const ReconciliationSidePosition = z
   .object({
-    quotaType: QuotaType,
-    requestedValue: z.number().int().min(1),
-    reason: z.string().min(10).max(1000),
+    stellarAddress: z.string(),
+    outcome: z.string(),
+    amount: z.string(),
   })
-  .openapi("CreateQuotaRequest");
+  .openapi("ReconciliationSidePosition");
 
-const QuotaRequestSchema = z
+const ReconciliationDiffEntry = z
   .object({
-    id: z.string().uuid(),
-    userId: z.string().uuid(),
-    quotaType: z.string(),
-    requestedValue: z.number().int(),
-    reason: z.string(),
-    status: z.string(),
-    reviewedBy: z.string().nullable(),
-    reviewNotes: z.string().nullable(),
-    reviewedAt: z.string().datetime().nullable(),
-    createdAt: z.string().datetime(),
-    updatedAt: z.string().datetime(),
+    key: z.object({ stellarAddress: z.string(), outcome: z.string() }),
+    dbAmount: z.string(),
+    onChainAmount: z.string().nullable(),
+    difference: z.string().nullable(),
+    status: z.enum(["match", "mismatch", "missing_on_chain", "missing_in_db"]),
   })
-  .openapi("QuotaRequest");
+  .openapi("ReconciliationDiffEntry");
 
-registry.registerPath({
-  method: "post",
-  path: "/api/quota/requests",
-  operationId: "createQuotaRequest",
-  tags: ["Quota"],
-  summary: "Submit a quota increase request",
-  description:
-    "Authenticated users can request an increase to their rate limits. " +
-    "Each user may have at most 5 pending requests at a time.",
-  security: [{ bearerAuth: [] }],
-  request: {
-    body: { content: { "application/json": { schema: CreateQuotaRequestSchema } } },
-  },
-  responses: {
-    201: {
-      description: "Quota request created",
-      content: {
-        "application/json": { schema: z.object({ data: QuotaRequestSchema }) },
-      },
-    },
-    400: {
-      description: "Validation error or too many pending requests",
-      content: { "application/json": { schema: ValidationErrorBody } },
-    },
-    401: {
-      description: "Unauthorized",
-      content: { "application/json": { schema: ErrorBody } },
-    },
-    403: {
-      description: "Forbidden",
-      content: { "application/json": { schema: ErrorBody } },
-    },
-    422: {
-      description: "Validation error",
-      content: { "application/json": { schema: ValidationErrorBody } },
-    },
-    429: {
-      description: "Rate limit exceeded",
-      content: { "application/json": { schema: ErrorBody } },
-    },
-  },
-});
+const ReconciliationSummary = z
+  .object({
+    totalKeys: z.number().int(),
+    matches: z.number().int(),
+    mismatches: z.number().int(),
+    missingOnChain: z.number().int(),
+    missingInDb: z.number().int(),
+  })
+  .openapi("ReconciliationSummary");
+
+const MarketReconciliationResult = z
+  .object({
+    marketId: z.string(),
+    correlationId: z.string(),
+    generatedAt: z.string().datetime(),
+    status: z.enum(["ok", "partial"]),
+    dbSnapshot: z.object({
+      positions: z.array(ReconciliationSidePosition),
+      totalAmount: z.string(),
+    }),
+    onChainSnapshot: z.object({
+      positions: z.array(ReconciliationSidePosition),
+      totalAmount: z.string(),
+      available: z.boolean(),
+      source: z.string(),
+      unavailableReason: z.string().nullable(),
+    }),
+    summary: ReconciliationSummary,
+    diffs: z.array(ReconciliationDiffEntry),
+  })
+  .openapi("MarketReconciliationResult");
 
 registry.registerPath({
   method: "get",
-  path: "/api/quota/requests",
-  operationId: "listQuotaRequests",
-  tags: ["Quota"],
-  summary: "List quota requests for the authenticated user",
-  description: "Returns all quota requests submitted by the authenticated user, newest first.",
+  path: "/api/admin/recon/markets/{id}",
+  operationId: "adminReconcileMarket",
+  tags: ["Admin"],
+  summary: "On-demand market reconciliation (admin only)",
+  description:
+    "Compares confirmed on-chain positions against the database snapshot for a " +
+    "single market and returns a structured diff. " +
+    "Every call is audit-logged as `admin.reconciliation.market.inspect`. " +
+    "Returns `status: \"partial\"` when the on-chain adapter is not yet wired.",
   security: [{ bearerAuth: [] }],
+  request: {
+    params: z.object({ id: z.string().min(1).max(255).describe("Market ID") }),
+  },
   responses: {
     200: {
-      description: "List of quota requests",
+      description: "Reconciliation result",
       content: {
         "application/json": {
-          schema: z.object({ data: z.array(QuotaRequestSchema) }),
+          schema: z.object({ data: MarketReconciliationResult }),
         },
       },
     },
-    401: {
-      description: "Unauthorized",
-      content: { "application/json": { schema: ErrorBody } },
+    400: {
+      description: "Validation error — invalid market ID",
+      content: { "application/json": { schema: ValidationErrorBody } },
     },
     403: {
-      description: "Forbidden",
+      description: "Forbidden — missing or non-admin JWT",
       content: { "application/json": { schema: ErrorBody } },
     },
-    429: {
-      description: "Rate limit exceeded",
+    404: {
+      description: "Market not found",
+      content: { "application/json": { schema: ErrorBody } },
+    },
+    500: {
+      description: "Internal server error",
       content: { "application/json": { schema: ErrorBody } },
     },
   },
 });
 
-// ── /api/leaderboard/global ──────────────────────────────────────────────────
+// ── /api/webhooks ─────────────────────────────────────────────────────────────
 
-/**
- * GlobalLeaderboardEntry — a single row in the global leaderboard.
- * Aggregated across ALL markets (no time-window filter).
- */
-const GlobalLeaderboardEntry = registry.register(
-  "GlobalLeaderboardEntry",
-  z
-    .object({
-      user_id: z.string().uuid().describe("Internal user UUID"),
-      stellar_address: z.string().describe("User's Stellar public key (G…)"),
-      total_predictions: z
-        .number()
-        .int()
-        .nonnegative()
-        .describe("Total predictions placed across all markets"),
-      correct_predictions: z
-        .number()
-        .int()
-        .nonnegative()
-        .describe("Predictions whose outcome matched the resolved market outcome"),
-      accuracy_percentage: z
-        .number()
-        .min(0)
-        .max(100)
-        .describe("Accuracy as a percentage (0–100), rounded to 2 d.p."),
-      total_markets: z
-        .number()
-        .int()
-        .nonnegative()
-        .describe("Number of distinct markets in which the user participated"),
-      rank: z
-        .number()
-        .int()
-        .positive()
-        .describe(
-          "1-based global rank, ordered by accuracy DESC then total_predictions DESC",
-        ),
-    })
-    .openapi("GlobalLeaderboardEntry"),
-);
+const DeliveryStatus = z
+  .enum(["pending", "delivered", "failed"])
+  .openapi("DeliveryStatus", {
+    description: "Current delivery state of a webhook attempt",
+  });
+
+const WebhookDelivery = z
+  .object({
+    id: z.string().uuid().describe("Unique delivery ID"),
+    eventId: z.string().describe("Opaque event identifier supplied by the emitting service"),
+    eventType: z.string().describe('Event type string, e.g. "market.resolved" or "dispute.opened"'),
+    targetUrl: z.string().url().describe("The subscriber endpoint the delivery is sent to"),
+    payloadBase64: z.string().describe("Base64-encoded signed request body"),
+    signature: z.string().describe("HMAC-SHA256 signature over the payload, sent as a request header"),
+    headers: z
+      .record(z.string())
+      .nullable()
+      .describe("Extra HTTP headers sent with the delivery (may be null)"),
+    status: DeliveryStatus,
+    attempts: z.number().int().nonnegative().describe("Number of delivery attempts made so far"),
+    maxAttempts: z.number().int().positive().describe("Maximum attempts before the delivery is dead-lettered"),
+    lastError: z.string().nullable().describe("Error message from the most recent failed attempt, or null"),
+    nextAttemptAt: z
+      .string()
+      .datetime()
+      .nullable()
+      .describe("ISO 8601 timestamp of the next scheduled retry, or null when terminal"),
+    createdAt: z.string().datetime().describe("ISO 8601 timestamp when this delivery record was created"),
+    updatedAt: z.string().datetime().describe("ISO 8601 timestamp of the most recent status change"),
+  })
+  .openapi("WebhookDelivery");
+
+const DlqRow = z
+  .object({
+    id: z.string().uuid().describe("DLQ row ID (distinct from the original delivery ID)"),
+    originalId: z.string().uuid().describe("ID of the original live delivery that was dead-lettered"),
+    eventId: z.string().describe("Opaque event identifier from the original delivery"),
+    eventType: z.string().describe("Event type string from the original delivery"),
+    targetUrl: z.string().url().describe("Subscriber endpoint that failed to receive the delivery"),
+    payloadBase64: z.string().describe("Base64-encoded signed request body, identical to the original delivery"),
+    signature: z.string().describe("HMAC-SHA256 signature from the original delivery"),
+    headers: z
+      .record(z.string())
+      .nullable()
+      .describe("Extra HTTP headers from the original delivery (may be null)"),
+    attempts: z.number().int().nonnegative().describe("Total number of delivery attempts before dead-lettering"),
+    maxAttempts: z.number().int().positive().describe("Configured maximum attempts for the original delivery"),
+    lastError: z.string().describe("Error message from the final failed attempt"),
+    failedAt: z.string().datetime().describe("ISO 8601 timestamp when the delivery was moved to the DLQ"),
+    replayedAt: z
+      .string()
+      .datetime()
+      .nullable()
+      .describe("ISO 8601 timestamp of the replay request, or null if not yet replayed"),
+    replayDeliveryId: z
+      .string()
+      .uuid()
+      .nullable()
+      .describe("ID of the fresh live delivery created by replay, or null if not yet replayed"),
+  })
+  .openapi("DlqRow");
 
 registry.registerPath({
   method: "get",
-  path: "/api/leaderboard/global",
-  operationId: "getGlobalLeaderboard",
-  tags: ["Leaderboard"],
-  summary: "Global leaderboard across all markets",
+  path: "/api/webhooks",
+  operationId: "listWebhookDeliveries",
+  tags: ["Webhooks"],
+  summary: "List live webhook deliveries (admin only)",
   description:
-    "Returns a paginated leaderboard ranking all users by their prediction " +
-    "accuracy and volume across **every** market on the platform. " +
-    "Results are cached for 5 minutes. " +
-    "Pass `refresh=true` to force an immediate materialized-view refresh " +
-    "(expensive; intended for admin/debug use).",
+    "Returns a cursor-paginated list of live webhook delivery records ordered newest-first " +
+    "(by `createdAt` DESC, then `id` DESC as a stable tie-breaker). Only deliveries that have " +
+    "not yet been dead-lettered are returned here; exhausted deliveries appear in the DLQ at " +
+    "`GET /api/admin/webhooks/dlq`. Requires an admin JWT (`role: \"admin\"`).",
+  security: [{ bearerAuth: [] }],
   request: {
     query: z.object({
-      limit: z.coerce
-        .number()
-        .int()
-        .positive()
-        .max(100)
-        .default(50)
-        .describe("Maximum entries to return (1–100, default 50)"),
-      offset: z.coerce
-        .number()
-        .int()
-        .nonnegative()
-        .default(0)
-        .describe("Zero-based row offset for pagination (default 0)"),
-      refresh: z.coerce
-        .boolean()
-        .default(false)
-        .describe(
-          "When true, triggers REFRESH MATERIALIZED VIEW CONCURRENTLY before querying",
-        ),
+      cursor: z.string().min(1).optional(),
+      limit: z.coerce.number().int().positive().max(100).optional(),
     }),
   },
   responses: {
     200: {
-      description: "Paginated global leaderboard",
+      description: "Paginated page of live webhook deliveries",
       content: {
         "application/json": {
           schema: z.object({
-            data: z.array(GlobalLeaderboardEntry),
-            meta: z.object({
-              limit: z.number().int(),
-              offset: z.number().int(),
-              count: z.number().int(),
-              refresh: z.boolean(),
-            }),
+            data: z.array(WebhookDelivery),
+            nextCursor: z.string().nullable(),
           }),
+          examples: {
+            webhookDeliveriesPage: {
+              summary: "First page of live deliveries with one pending and one delivered record",
+              value: {
+                data: [
+                  {
+                    id: "d1a2b3c4-0001-4000-8000-000000000001",
+                    eventId: "evt-market-resolved-001",
+                    eventType: "market.resolved",
+                    targetUrl: "https://example.com/hooks/predictify",
+                    payloadBase64:
+                      "eyJldmVudCI6Im1hcmtldC5yZXNvbHZlZCIsImlkIjoiZDFhMmIzYzQtMDAwMS00MDAwLTgwMDAtMDAwMDAwMDAwMDAxIn0=",
+                    signature: "sha256=abcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890",
+                    headers: null,
+                    status: "delivered",
+                    attempts: 1,
+                    maxAttempts: 5,
+                    lastError: null,
+                    nextAttemptAt: null,
+                    createdAt: "2026-07-25T12:00:00.000Z",
+                    updatedAt: "2026-07-25T12:00:05.000Z",
+                  },
+                  {
+                    id: "d1a2b3c4-0002-4000-8000-000000000002",
+                    eventId: "evt-dispute-opened-001",
+                    eventType: "dispute.opened",
+                    targetUrl: "https://example.com/hooks/predictify",
+                    payloadBase64: "eyJldmVudCI6ImRpc3B1dGUub3BlbmVkIn0=",
+                    signature: "sha256=fedcba0987654321fedcba0987654321fedcba0987654321fedcba0987654321",
+                    headers: null,
+                    status: "pending",
+                    attempts: 0,
+                    maxAttempts: 5,
+                    lastError: null,
+                    nextAttemptAt: "2026-07-25T11:00:30.000Z",
+                    createdAt: "2026-07-25T11:00:00.000Z",
+                    updatedAt: "2026-07-25T11:00:00.000Z",
+                  },
+                ],
+                nextCursor:
+                  "eyJzb3J0VmFsdWUiOiIyMDI2LTA3LTI1VDExOjAwOjAwLjAwMFoiLCJpZCI6ImQxYTJiM2M0LTAwMDItNDAwMC04MDAwLTAwMDAwMDAwMDAwMiJ9",
+              },
+            },
+            emptyPage: {
+              summary: "Empty page when no live deliveries exist",
+              value: { data: [], nextCursor: null },
+            },
+          },
         },
       },
     },
     400: {
       description: "Invalid query parameters",
-      content: { "application/json": { schema: ValidationErrorBody } },
+      content: {
+        "application/json": {
+          schema: ErrorBody,
+          examples: {
+            invalidLimit: {
+              summary: "Non-numeric limit value",
+              value: {
+                error: {
+                  code: "validation_error",
+                  message: "limit must be a positive integer",
+                  requestId: "req-abc-123",
+                },
+              },
+            },
+          },
+        },
+      },
     },
-    429: {
-      description: "Rate limit exceeded",
+    401: {
+      description: "Missing or invalid JWT",
       content: { "application/json": { schema: ErrorBody } },
     },
-    500: {
-      description: "Internal server error",
+    403: {
+      description: "Caller is not an admin",
       content: { "application/json": { schema: ErrorBody } },
     },
   },
@@ -2402,39 +3409,307 @@ registry.registerPath({
 
 registry.registerPath({
   method: "get",
-  path: "/api/leaderboard/global/user/{stellarAddress}",
-  operationId: "getGlobalLeaderboardEntry",
-  tags: ["Leaderboard"],
-  summary: "Get a single user's global leaderboard entry",
+  path: "/api/admin/webhooks/dlq",
+  operationId: "listWebhookDlq",
+  tags: ["Webhooks"],
+  summary: "List dead-lettered webhook deliveries (admin only)",
   description:
-    "Looks up the global leaderboard rank and stats for a specific Stellar " +
-    "address. Returns 404 when the address has never placed a prediction.",
+    "Returns a cursor-paginated list of dead-lettered webhook deliveries ordered by `failedAt` DESC. " +
+    "A delivery appears here after exhausting all retry attempts. Use " +
+    "`POST /api/admin/webhooks/dlq/{id}/replay` to re-enqueue an individual entry. " +
+    "Requires an admin JWT (`role: \"admin\"`).",
+  security: [{ bearerAuth: [] }],
   request: {
-    params: z.object({
-      stellarAddress: z
-        .string()
-        .describe("The user's Stellar public key (G…)"),
+    query: z.object({
+      cursor: z.string().min(1).optional(),
+      limit: z.coerce.number().int().positive().max(100).optional(),
     }),
   },
   responses: {
     200: {
-      description: "User's global leaderboard entry",
+      description: "Paginated page of DLQ entries",
       content: {
         "application/json": {
-          schema: z.object({ data: GlobalLeaderboardEntry }),
+          schema: z.object({
+            data: z.array(DlqRow),
+            nextCursor: z.string().nullable(),
+          }),
+          examples: {
+            dlqPage: {
+              summary: "First DLQ page containing one unreplayed and one already-replayed entry",
+              value: {
+                data: [
+                  {
+                    id: "dddd1111-aaaa-4000-8000-000000000001",
+                    originalId: "d1a2b3c4-0001-4000-8000-000000000001",
+                    eventId: "evt-market-resolved-002",
+                    eventType: "market.resolved",
+                    targetUrl: "https://example.com/hooks/predictify",
+                    payloadBase64: "eyJldmVudCI6Im1hcmtldC5yZXNvbHZlZCJ9",
+                    signature: "sha256=1111222233334444555566667777888899990000aaaabbbbccccddddeeeeffff",
+                    headers: null,
+                    attempts: 5,
+                    maxAttempts: 5,
+                    lastError: "HTTP 503: Service Unavailable",
+                    failedAt: "2026-07-25T10:00:00.000Z",
+                    replayedAt: null,
+                    replayDeliveryId: null,
+                  },
+                  {
+                    id: "dddd2222-bbbb-4000-8000-000000000002",
+                    originalId: "d1a2b3c4-0003-4000-8000-000000000003",
+                    eventId: "evt-dispute-opened-002",
+                    eventType: "dispute.opened",
+                    targetUrl: "https://example.com/hooks/predictify",
+                    payloadBase64: "eyJldmVudCI6ImRpc3B1dGUub3BlbmVkIn0=",
+                    signature: "sha256=ffffeeeeddddccccbbbbaaaa00009999888877776666555544443333222211110000",
+                    headers: null,
+                    attempts: 3,
+                    maxAttempts: 3,
+                    lastError: "connect ECONNREFUSED 192.0.2.1:443",
+                    failedAt: "2026-07-25T09:00:00.000Z",
+                    replayedAt: "2026-07-25T09:30:00.000Z",
+                    replayDeliveryId: "eeee3333-cccc-4000-8000-000000000004",
+                  },
+                ],
+                nextCursor: null,
+              },
+            },
+            emptyDlq: {
+              summary: "No dead-lettered deliveries",
+              value: { data: [], nextCursor: null },
+            },
+          },
         },
       },
     },
+    401: {
+      description: "Missing or invalid JWT",
+      content: { "application/json": { schema: ErrorBody } },
+    },
+    403: {
+      description: "Caller is not an admin",
+      content: { "application/json": { schema: ErrorBody } },
+    },
+  },
+});
+
+registry.registerPath({
+  method: "post",
+  path: "/api/admin/webhooks/dlq/{id}/replay",
+  operationId: "replayWebhookDlq",
+  tags: ["Webhooks"],
+  summary: "Replay a dead-lettered webhook delivery (admin only)",
+  description:
+    "Re-enqueues a dead-lettered delivery as a fresh live delivery with `attempts = 0`. " +
+    "The original payload bytes and signature are preserved verbatim so the subscriber " +
+    "receives an identical signed request. Requires an admin JWT (`role: \"admin\"`).",
+  security: [{ bearerAuth: [] }],
+  request: {
+    params: z.object({ id: z.string().uuid().describe("UUID of the DLQ row to replay") }),
+  },
+  responses: {
+    202: {
+      description: "Replay accepted — a fresh live delivery has been enqueued",
+      content: {
+        "application/json": {
+          schema: z.object({
+            data: z.object({
+              deliveryId: z.string().uuid().describe("ID of the newly-created live delivery"),
+              status: DeliveryStatus,
+              attempts: z.number().int().nonnegative().describe("Always 0 for a freshly replayed delivery"),
+            }),
+          }),
+          examples: {
+            replayAccepted: {
+              summary: "Successful replay — new delivery created",
+              value: {
+                data: {
+                  deliveryId: "ffff4444-dddd-4000-8000-000000000005",
+                  status: "pending",
+                  attempts: 0,
+                },
+              },
+            },
+          },
+        },
+      },
+    },
+    400: {
+      description: "Malformed UUID in path",
+      content: {
+        "application/json": {
+          schema: ErrorBody,
+          examples: {
+            badId: {
+              summary: "Non-UUID id parameter",
+              value: {
+                error: {
+                  code: "bad_request",
+                  message: "Invalid ID format",
+                  requestId: "req-xyz-789",
+                },
+              },
+            },
+          },
+        },
+      },
+    },
+    401: {
+      description: "Missing or invalid JWT",
+      content: { "application/json": { schema: ErrorBody } },
+    },
+    403: {
+      description: "Caller is not an admin",
+      content: { "application/json": { schema: ErrorBody } },
+    },
     404: {
-      description: "Address not found on the global leaderboard",
+      description: "DLQ row not found",
+      content: {
+        "application/json": {
+          schema: ErrorBody,
+          examples: {
+            notFound: {
+              summary: "No DLQ row with the given id",
+              value: {
+                error: {
+                  code: "not_found",
+                  message: "DLQ row not found",
+                  requestId: "req-xyz-790",
+                },
+              },
+            },
+          },
+        },
+      },
+    },
+    409: {
+      description: "DLQ row already replayed",
+      content: {
+        "application/json": {
+          schema: z.object({
+            error: z.object({ type: z.literal("already_replayed") }),
+            replayDeliveryId: z.string().uuid().nullable(),
+          }),
+          examples: {
+            alreadyReplayed: {
+              summary: "This DLQ row was already replayed — idempotency guard triggered",
+              value: {
+                error: { type: "already_replayed" },
+                replayDeliveryId: "ffff4444-dddd-4000-8000-000000000005",
+              },
+            },
+          },
+        },
+      },
+    },
+  },
+});
+
+// ── /api/referrals ───────────────────────────────────────────────────────────
+
+registry.registerPath({
+  method: "post",
+  path: "/api/referrals",
+  operationId: "createReferral",
+  tags: ["Referrals"],
+  summary: "Create a referral code",
+  description: "Creates a new referral code for the authenticated user.",
+  security: [{ bearerAuth: [] }],
+  request: {
+    body: {
+      content: {
+        "application/json": {
+          schema: z.object({
+            campaignId: z.string().optional(),
+          }),
+          examples: {
+            success: {
+              summary: "Create referral request",
+              value: {
+                campaignId: "FWC26",
+              },
+            },
+          },
+        },
+      },
+    },
+  },
+  responses: {
+    201: {
+      description: "Referral created",
+      content: {
+        "application/json": {
+          schema: z.object({
+            data: z.object({
+              referralCode: z.string(),
+              message: z.string(),
+            }),
+          }),
+          examples: {
+            success: {
+              summary: "Referral code created successfully",
+              value: {
+                data: {
+                  referralCode: "REF-ABC-123",
+                  message: "Referral created successfully",
+                },
+              },
+            },
+          },
+        },
+      },
+    },
+    401: {
+      description: "Missing or invalid JWT",
       content: { "application/json": { schema: ErrorBody } },
     },
-    429: {
-      description: "Rate limit exceeded",
-      content: { "application/json": { schema: ErrorBody } },
+  },
+});
+
+registry.registerPath({
+  method: "get",
+  path: "/api/referrals",
+  operationId: "listReferrals",
+  tags: ["Referrals"],
+  summary: "List user referrals",
+  description: "Lists all referrals made by the authenticated user.",
+  security: [{ bearerAuth: [] }],
+  responses: {
+    200: {
+      description: "List of referrals",
+      content: {
+        "application/json": {
+          schema: z.object({
+            data: z.array(
+              z.object({
+                id: z.string(),
+                referredUser: z.string(),
+                status: z.enum(["pending", "completed"]),
+                createdAt: z.string().datetime(),
+              })
+            ),
+          }),
+          examples: {
+            success: {
+              summary: "Referral list",
+              value: {
+                data: [
+                  {
+                    id: "ref-001",
+                    referredUser: "GD2...",
+                    status: "completed",
+                    createdAt: "2026-07-28T12:00:00Z",
+                  },
+                ],
+              },
+            },
+          },
+        },
+      },
     },
-    500: {
-      description: "Internal server error",
+    401: {
+      description: "Missing or invalid JWT",
       content: { "application/json": { schema: ErrorBody } },
     },
   },

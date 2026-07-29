@@ -40,46 +40,6 @@ components:
             - code
       required:
         - error
-    GlobalLeaderboardEntry:
-      type: object
-      properties:
-        user_id:
-          type: string
-          format: uuid
-          description: Internal user UUID
-        stellar_address:
-          type: string
-          description: User's Stellar public key (G…)
-        total_predictions:
-          type: integer
-          minimum: 0
-          description: Total predictions placed across all markets
-        correct_predictions:
-          type: integer
-          minimum: 0
-          description: Predictions whose outcome matched the resolved market outcome
-        accuracy_percentage:
-          type: number
-          minimum: 0
-          maximum: 100
-          description: Accuracy as a percentage (0–100), rounded to 2 d.p.
-        total_markets:
-          type: integer
-          minimum: 0
-          description: Number of distinct markets in which the user participated
-        rank:
-          type: integer
-          minimum: 0
-          exclusiveMinimum: true
-          description: 1-based global rank, ordered by accuracy DESC then total_predictions DESC
-      required:
-        - user_id
-        - stellar_address
-        - total_predictions
-        - correct_predictions
-        - accuracy_percentage
-        - total_markets
-        - rank
     DependencyHealth:
       type: object
       properties:
@@ -234,6 +194,44 @@ components:
           minLength: 1
       required:
         - refreshToken
+    AuthHealthResponse:
+      type: object
+      properties:
+        status:
+          type: string
+          enum:
+            - ok
+            - down
+        correlationId:
+          type: string
+        checkedAt:
+          type: string
+          format: date-time
+        dependencies:
+          type: object
+          properties:
+            database:
+              type: object
+              properties:
+                status:
+                  type: string
+                  enum:
+                    - ok
+                    - down
+                latencyMs:
+                  type: number
+                error:
+                  type: string
+              required:
+                - status
+                - latencyMs
+          required:
+            - database
+      required:
+        - status
+        - correlationId
+        - checkedAt
+        - dependencies
     Market:
       type: object
       properties:
@@ -426,6 +424,35 @@ components:
             - bypasses
       required:
         - data
+    RateLimitAuditEntry:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        action:
+          type: string
+          enum:
+            - rate_limit.blocked
+        walletAddress:
+          type: string
+          nullable: true
+        ip:
+          type: string
+        correlationId:
+          type: string
+        rateLimitContext:
+          nullable: true
+        createdAt:
+          type: string
+          format: date-time
+      required:
+        - id
+        - action
+        - walletAddress
+        - ip
+        - correlationId
+        - createdAt
     FeaturedMarket:
       type: object
       properties:
@@ -482,6 +509,21 @@ components:
         - featuredAt
         - featuredBy
         - changed
+    ForceResolveResponse:
+      type: object
+      properties:
+        marketId:
+          type: string
+        winningOutcome:
+          type: string
+        forceResolved:
+          type: boolean
+          enum:
+            - true
+      required:
+        - marketId
+        - winningOutcome
+        - forceResolved
     FeatureFlag:
       type: object
       properties:
@@ -613,6 +655,21 @@ components:
         markAllAsRead:
           type: boolean
       additionalProperties: false
+    UserListRow:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        stellarAddress:
+          type: string
+        createdAt:
+          type: string
+          format: date-time
+      required:
+        - id
+        - stellarAddress
+        - createdAt
     CurrentUserProfile:
       type: object
       properties:
@@ -890,6 +947,28 @@ components:
         - id
         - action
         - createdAt
+    AuditActionCount:
+      type: object
+      properties:
+        action:
+          type: string
+        count:
+          type: integer
+      required:
+        - action
+        - count
+    AuditCountsSummary:
+      type: object
+      properties:
+        totalCount:
+          type: integer
+        byAction:
+          type: array
+          items:
+            $ref: '#/components/schemas/AuditActionCount'
+      required:
+        - totalCount
+        - byAction
     PluginView:
       type: object
       properties:
@@ -1087,73 +1166,136 @@ components:
         - indexer
         - rpc
         - checkedAt
-    QuotaRequest:
+    ReconciliationSidePosition:
       type: object
       properties:
-        id:
+        stellarAddress:
           type: string
-          format: uuid
-        userId:
+        outcome:
           type: string
-          format: uuid
-        quotaType:
+        amount:
           type: string
-        requestedValue:
+      required:
+        - stellarAddress
+        - outcome
+        - amount
+    ReconciliationSummary:
+      type: object
+      properties:
+        totalKeys:
           type: integer
-        reason:
+        matches:
+          type: integer
+        mismatches:
+          type: integer
+        missingOnChain:
+          type: integer
+        missingInDb:
+          type: integer
+      required:
+        - totalKeys
+        - matches
+        - mismatches
+        - missingOnChain
+        - missingInDb
+    ReconciliationDiffEntry:
+      type: object
+      properties:
+        key:
+          type: object
+          properties:
+            stellarAddress:
+              type: string
+            outcome:
+              type: string
+          required:
+            - stellarAddress
+            - outcome
+        dbAmount:
           type: string
+        onChainAmount:
+          type: string
+          nullable: true
+        difference:
+          type: string
+          nullable: true
         status:
           type: string
-        reviewedBy:
-          type: string
-          nullable: true
-        reviewNotes:
-          type: string
-          nullable: true
-        reviewedAt:
-          type: string
-          nullable: true
-          format: date-time
-        createdAt:
-          type: string
-          format: date-time
-        updatedAt:
-          type: string
-          format: date-time
+          enum:
+            - match
+            - mismatch
+            - missing_on_chain
+            - missing_in_db
       required:
-        - id
-        - userId
-        - quotaType
-        - requestedValue
-        - reason
+        - key
+        - dbAmount
+        - onChainAmount
+        - difference
         - status
-        - reviewedBy
-        - reviewNotes
-        - reviewedAt
-        - createdAt
-        - updatedAt
-    QuotaType:
-      type: string
-      enum:
-        - prediction_limit
-        - daily_prediction_limit
-        - claim_limit
-    CreateQuotaRequest:
+    MarketReconciliationResult:
       type: object
       properties:
-        quotaType:
-          $ref: '#/components/schemas/QuotaType'
-        requestedValue:
-          type: integer
-          minimum: 1
-        reason:
+        marketId:
           type: string
-          minLength: 10
-          maxLength: 1000
+        correlationId:
+          type: string
+        generatedAt:
+          type: string
+          format: date-time
+        status:
+          type: string
+          enum:
+            - ok
+            - partial
+        dbSnapshot:
+          type: object
+          properties:
+            positions:
+              type: array
+              items:
+                $ref: '#/components/schemas/ReconciliationSidePosition'
+            totalAmount:
+              type: string
+          required:
+            - positions
+            - totalAmount
+        onChainSnapshot:
+          type: object
+          properties:
+            positions:
+              type: array
+              items:
+                $ref: '#/components/schemas/ReconciliationSidePosition'
+            totalAmount:
+              type: string
+            available:
+              type: boolean
+            source:
+              type: string
+            unavailableReason:
+              type: string
+              nullable: true
+          required:
+            - positions
+            - totalAmount
+            - available
+            - source
+            - unavailableReason
+        summary:
+          $ref: '#/components/schemas/ReconciliationSummary'
+        diffs:
+          type: array
+          items:
+            $ref: '#/components/schemas/ReconciliationDiffEntry'
       required:
-        - quotaType
-        - requestedValue
-        - reason
+        - marketId
+        - correlationId
+        - generatedAt
+        - status
+        - dbSnapshot
+        - onChainSnapshot
+        - summary
+        - diffs
     DeliveryStatus:
       type: string
       enum:
@@ -1163,9 +1305,6 @@ components:
       description: Current delivery state of a webhook attempt
     WebhookDelivery:
       type: object
-      description: >-
-        A live webhook delivery record. `payloadBase64` is the original signed
-        request body encoded as base64; decode it to recover the JSON payload.
       properties:
         id:
           type: string
@@ -1176,7 +1315,7 @@ components:
           description: Opaque event identifier supplied by the emitting service
         eventType:
           type: string
-          description: 'Event type string, e.g. "market.resolved" or "dispute.opened"'
+          description: Event type string, e.g. "market.resolved" or "dispute.opened"
         targetUrl:
           type: string
           format: uri
@@ -1201,7 +1340,8 @@ components:
           description: Number of delivery attempts made so far
         maxAttempts:
           type: integer
-          minimum: 1
+          minimum: 0
+          exclusiveMinimum: true
           description: Maximum attempts before the delivery is dead-lettered
         lastError:
           type: string
@@ -1209,8 +1349,8 @@ components:
           description: Error message from the most recent failed attempt, or null
         nextAttemptAt:
           type: string
-          format: date-time
           nullable: true
+          format: date-time
           description: ISO 8601 timestamp of the next scheduled retry, or null when terminal
         createdAt:
           type: string
@@ -1237,9 +1377,6 @@ components:
         - updatedAt
     DlqRow:
       type: object
-      description: >-
-        A dead-lettered webhook delivery. Created when a live delivery exhausts
-        all retry attempts. Can be replayed via `POST /api/admin/webhooks/dlq/{id}/replay`.
       properties:
         id:
           type: string
@@ -1277,7 +1414,8 @@ components:
           description: Total number of delivery attempts before dead-lettering
         maxAttempts:
           type: integer
-          minimum: 1
+          minimum: 0
+          exclusiveMinimum: true
           description: Configured maximum attempts for the original delivery
         lastError:
           type: string
@@ -1288,13 +1426,13 @@ components:
           description: ISO 8601 timestamp when the delivery was moved to the DLQ
         replayedAt:
           type: string
-          format: date-time
           nullable: true
+          format: date-time
           description: ISO 8601 timestamp of the replay request, or null if not yet replayed
         replayDeliveryId:
           type: string
-          format: uuid
           nullable: true
+          format: uuid
           description: ID of the fresh live delivery created by replay, or null if not yet replayed
       required:
         - id
@@ -1311,8 +1449,154 @@ components:
         - failedAt
         - replayedAt
         - replayDeliveryId
+    FingerprintResponse:
+      type: object
+      properties:
+        fingerprint:
+          type: string
+          description: 64-character hex SHA-256 fingerprint of the request structure
+          minLength: 64
+          maxLength: 64
+          pattern: '^[0-9a-f]{64}$'
+        correlationId:
+          type: string
+          description: Correlation ID for distributed tracing
+        method:
+          type: string
+          description: HTTP method of the request
+        path:
+          type: string
+          description: Normalised path of the request (excludes query string)
+        computedAt:
+          type: string
+          format: date-time
+          description: ISO 8601 timestamp when the fingerprint was computed
+      required:
+        - fingerprint
+        - correlationId
+        - method
+        - path
+        - computedAt
   parameters: {}
 paths:
+  /api/comments:
+    get:
+      tags:
+        - Comments
+      summary: List all comments
+      description: Root comments endpoint for listing comments securely.
+      parameters:
+        - in: query
+          name: limit
+          schema:
+            type: integer
+            maximum: 100
+            minimum: 1
+          required: false
+        - in: query
+          name: cursor
+          schema:
+            type: string
+          required: false
+      responses:
+        '200':
+          description: A list of comments
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items:
+                      type: object
+                  nextCursor:
+                    type: string
+                    nullable: true
+                  message:
+                    type: string
+              examples:
+                Success:
+                  summary: Example successful response
+                  value:
+                    data: []
+                    nextCursor: null
+                    message: "Comments fetched securely"
+    post:
+      tags:
+        - Comments
+      summary: Create a new comment
+      description: Creates a new comment and optionally dispatches an outbound call propagating X-Correlation-Id.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                marketId:
+                  type: string
+                body:
+                  type: string
+                  maxLength: 2000
+                authorAddress:
+                  type: string
+                outboundUrl:
+                  type: string
+                  format: uri
+              required:
+                - marketId
+                - body
+            examples:
+              CreateCommentExample:
+                summary: Example create comment request
+                value:
+                  marketId: "market-123"
+                  body: "This market has an interesting prediction."
+                  authorAddress: "GBX..."
+                  outboundUrl: "https://webhook.site/abc"
+      responses:
+        '201':
+          description: Comment created successfully
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: object
+                    properties:
+                      id:
+                        type: string
+                      marketId:
+                        type: string
+                      body:
+                        type: string
+                      authorAddress:
+                        type: string
+                        nullable: true
+                      createdAt:
+                        type: string
+                        format: date-time
+                  message:
+                    type: string
+              examples:
+                SuccessExample:
+                  summary: Example successful creation
+                  value:
+                    data:
+                      id: "c-1678886400000"
+                      marketId: "market-123"
+                      body: "This market has an interesting prediction."
+                      authorAddress: "GBX..."
+                      createdAt: "2023-03-15T12:00:00.000Z"
+                    message: "Comment created successfully"
+        '400':
+          description: Validation error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ValidationErrorBody'
   /health:
     get:
       operationId: healthCheck
@@ -1550,6 +1834,28 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ErrorBody'
+  /api/auth/health:
+    get:
+      operationId: authHealth
+      tags:
+        - Health
+      summary: Health probe for /api/auth dependencies
+      description: >-
+        Probes the Postgres database used by auth operations (challenge store, refresh-token store). No authentication
+        required.
+      responses:
+        '200':
+          description: Auth service dependencies are healthy
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AuthHealthResponse'
+        '503':
+          description: Database probe failed
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AuthHealthResponse'
   /api/markets/recommendations:
     get:
       operationId: getMarketRecommendations
@@ -1572,12 +1878,30 @@ paths:
                       $ref: '#/components/schemas/Market'
                 required:
                   - data
+              examples:
+                recommendedMarkets:
+                  value:
+                    data:
+                      - id: market-003
+                        question: Will Bitcoin close above $100k in 2026?
+                        status: active
+                        metadata:
+                          category: crypto
+                          resolutionSource: official
+                        version: 1
+                        createdAt: '2026-03-01T09:00:00.000Z'
         '401':
           description: Unauthorized
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/ErrorBody'
+              examples:
+                unauthorized:
+                  value:
+                    error:
+                      code: unauthorized
+                      requestId: req_abc123
   /api/markets:
     get:
       operationId: listMarkets
@@ -1661,12 +1985,47 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/MarketSearchResult'
+              examples:
+                searchResults:
+                  value:
+                    data:
+                      - id: market-001
+                        question: Will the US win the 2026 FIFA World Cup?
+                        status: active
+                        metadata:
+                          category: sports
+                          resolutionSource: official
+                        version: 1
+                        createdAt: '2026-01-10T12:00:00.000Z'
+                    total: 1
+                    limit: 20
+                    offset: 0
+                    page: 1
+                    fallback: false
+                    pagination:
+                      limit: 20
+                      offset: 0
+                      page: 1
+                      total: 1
+                      fallback: false
+                    meta:
+                      limit: 20
+                      offset: 0
+                      page: 1
+                      total: 1
+                      fallback: false
         '400':
           description: Missing query parameter
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/ErrorBody'
+              examples:
+                missingQuery:
+                  value:
+                    error:
+                      code: validation_error
+                      requestId: req_abc123
   /api/markets/tags:
     get:
       operationId: getMarketTags
@@ -1695,6 +2054,16 @@ paths:
                         - count
                 required:
                   - data
+              examples:
+                tagCounts:
+                  value:
+                    data:
+                      - tag: sports
+                        count: 42
+                      - tag: crypto
+                        count: 17
+                      - tag: technology
+                        count: 9
   /api/markets/{id}:
     get:
       operationId: getMarketById
@@ -1755,6 +2124,13 @@ paths:
           application/json:
             schema:
               $ref: '#/components/schemas/PatchMarketRequest'
+            examples:
+              updateQuestion:
+                value:
+                  question: Will the US win the 2026 FIFA World Cup Final?
+                  metadata:
+                    category: sports
+                  expectedVersion: 1
       responses:
         '200':
           description: Updated market
@@ -1767,24 +2143,56 @@ paths:
                     $ref: '#/components/schemas/Market'
                 required:
                   - data
+              examples:
+                updatedMarket:
+                  value:
+                    data:
+                      id: market-001
+                      question: Will the US win the 2026 FIFA World Cup Final?
+                      status: active
+                      metadata:
+                        category: sports
+                      version: 2
+                      createdAt: '2026-01-10T12:00:00.000Z'
         '400':
           description: Validation error
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/ValidationErrorBody'
+              examples:
+                invalidBody:
+                  value:
+                    error:
+                      code: validation_error
+                      details:
+                        - path:
+                            - expectedVersion
+                          message: expectedVersion is required
         '404':
           description: Not found
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/ErrorBody'
+              examples:
+                notFound:
+                  value:
+                    error:
+                      code: not_found
+                      requestId: req_abc123
         '409':
           description: Version conflict
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/ErrorBody'
+              examples:
+                versionConflict:
+                  value:
+                    error:
+                      code: conflict
+                      requestId: req_abc123
   /api/markets/{id}/prediction-count:
     get:
       operationId: getMarketPredictionCount
@@ -1807,18 +2215,41 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/PredictionCountResponse'
+              examples:
+                predictionCount:
+                  value:
+                    data:
+                      marketId: market-001
+                      count: 128
+                      computedAt: '2026-06-27T12:00:00.000Z'
+                      cached: true
         '400':
           description: Validation error
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/ValidationErrorBody'
+              examples:
+                invalidId:
+                  value:
+                    error:
+                      code: validation_error
+                      details:
+                        - path:
+                            - id
+                          message: Market ID is required
         '404':
           description: Market not found
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/ErrorBody'
+              examples:
+                notFound:
+                  value:
+                    error:
+                      code: not_found
+                      requestId: req_abc123
   /api/leaderboard:
     get:
       operationId: getLeaderboard
@@ -1911,6 +2342,33 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ErrorBody'
+  /api/fingerprint:
+    get:
+      operationId: getRequestFingerprint
+      tags:
+        - Fingerprint
+      summary: Get the SHA-256 fingerprint of the current request
+      description: >-
+        Returns a stable SHA-256 fingerprint computed from the request's structural
+        identity (method, path, Content-Type, Accept, Authorization scheme, and body hash).
+        The fingerprint is deterministic — identical requests produce the same fingerprint —
+        enabling forensic correlation, retry detection, and audit-log enrichment.
+        The response also includes the X-Correlation-Id for distributed tracing.
+      responses:
+        '200':
+          description: Fingerprint computed successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/FingerprintResponse'
+              examples:
+                fingerprint:
+                  value:
+                    fingerprint: 'e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855'
+                    correlationId: '550e8400-e29b-41d4-a716-446655440000'
+                    method: 'GET'
+                    path: '/api/fingerprint'
+                    computedAt: '2026-07-28T12:00:00.000Z'
   /api/rate-limit/status:
     get:
       operationId: getRateLimitStatus
@@ -1926,6 +2384,63 @@ paths:
                 anyOf:
                   - $ref: '#/components/schemas/AnonRateLimitStatus'
                   - $ref: '#/components/schemas/AuthRateLimitStatus'
+  /api/rate-limit:
+    get:
+      operationId: listRateLimitEvents
+      tags:
+        - Rate Limiting
+      summary: List rate-limit audit events (admin only)
+      security:
+        - bearerAuth: []
+      parameters:
+        - schema:
+            type: string
+          required: false
+          name: cursor
+          in: query
+        - schema:
+            type: integer
+            minimum: 0
+            exclusiveMinimum: true
+          required: false
+          name: limit
+          in: query
+      responses:
+        '200':
+          description: Paginated rate-limit audit log
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/RateLimitAuditEntry'
+                  nextCursor:
+                    type: string
+                    nullable: true
+                required:
+                  - data
+                  - nextCursor
+        '400':
+          description: Invalid query parameters
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '401':
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '403':
+          description: Forbidden
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
   /api/markets/featured:
     get:
       operationId: getFeaturedMarkets
@@ -1954,12 +2469,32 @@ paths:
                       $ref: '#/components/schemas/FeaturedMarket'
                 required:
                   - data
+              examples:
+                featuredMarkets:
+                  value:
+                    data:
+                      - id: market-001
+                        question: Will the US win the 2026 FIFA World Cup?
+                        status: active
+                        resolutionOutcome: null
+                        resolutionTime: '2026-07-19T00:00:00.000Z'
+                        winningOutcome: null
+                        metadata:
+                          category: sports
+                        featuredAt: '2026-06-20T08:00:00.000Z'
+                        featuredBy: GADMIN1234567890DEFGHIJKLMNOPQRSTUV
         '400':
           description: Invalid query parameters
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/ErrorBody'
+              examples:
+                invalidLimit:
+                  value:
+                    error:
+                      code: validation_error
+                      requestId: req_abc123
   /api/admin/markets/{id}/feature:
     post:
       operationId: featureAdminMarket
@@ -2071,6 +2606,75 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ErrorBody'
+  /api/admin/force-resolve/{id}:
+    post:
+      operationId: forceResolveAdmin
+      tags:
+        - Admin
+      summary: Force-resolve a stuck market (admin only, idempotent)
+      security:
+        - bearerAuth: []
+      parameters:
+        - schema:
+            type: string
+          required: true
+          name: id
+          in: path
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                winningOutcome:
+                  type: string
+                  minLength: 1
+                  description: The outcome to set as the winner
+                  example: 'yes'
+              required:
+                - winningOutcome
+      responses:
+        '200':
+          description: Market force-resolved successfully
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    $ref: '#/components/schemas/ForceResolveResponse'
+                required:
+                  - data
+        '400':
+          description: Validation error — missing or invalid winningOutcome
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ValidationErrorBody'
+        '403':
+          description: Forbidden — missing or invalid admin JWT
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '404':
+          description: Market not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '409':
+          description: Market already resolved or force-finalized
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '422':
+          description: Market has not yet reached its resolution deadline
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ValidationErrorBody'
   /api/admin/feature-flags:
     get:
       operationId: listAdminFeatureFlags
@@ -2395,6 +2999,58 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ErrorBody'
+  /api/users:
+    get:
+      operationId: listUsers
+      tags:
+        - Users
+      summary: List all users (cursor-paginated)
+      description: >-
+        Returns a cursor-paginated list of registered users sorted newest-first (DESC createdAt, DESC id).  Pass the
+        opaque `nextCursor` value from one response as the `cursor` query parameter of the next request to advance
+        through pages.  A null `nextCursor` indicates the last page.
+      parameters:
+        - schema:
+            type: string
+            description: Opaque cursor token from the previous page's nextCursor field.
+            example: djF8MjZ8MjAyNi0wMS0wMVQwMDowMDowMC4wMDBafGFiY2Qtd...
+          required: false
+          name: cursor
+          in: query
+        - schema:
+            type: integer
+            minimum: 1
+            maximum: 100
+            default: 20
+            description: Page size (1–100, default 20).
+          required: false
+          name: limit
+          in: query
+      responses:
+        '200':
+          description: Paginated list of users
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/UserListRow'
+                  nextCursor:
+                    type: string
+                    nullable: true
+                    description: Cursor for the next page, or null on the last page.
+                required:
+                  - data
+                  - nextCursor
+        '400':
+          description: Validation error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ValidationErrorBody'
   /api/users/me:
     get:
       operationId: getCurrentUser
@@ -2430,6 +3086,12 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ErrorBody'
+              examples:
+                unauthorized:
+                  value:
+                    error:
+                      code: UNAUTHORIZED
+                      requestId: req_xyz789
   /api/users/{address}/predictions:
     get:
       operationId: getUserPredictions
@@ -2494,12 +3156,24 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ErrorBody'
+              examples:
+                invalidAddress:
+                  value:
+                    error:
+                      code: invalid_address
+                      requestId: req_abc123
         '404':
           description: User not found
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/ErrorBody'
+              examples:
+                notFound:
+                  value:
+                    error:
+                      code: not_found
+                      requestId: req_abc123
   /api/users/{stellarAddress}/profile:
     get:
       operationId: getUserProfile
@@ -2545,12 +3219,24 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ErrorBody'
+              examples:
+                invalidAddress:
+                  value:
+                    error:
+                      code: validation_error
+                      requestId: req_xyz789
         '404':
           description: User not found
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/ErrorBody'
+              examples:
+                notFound:
+                  value:
+                    error:
+                      code: not_found
+                      requestId: req_xyz789
   /api/predictions:
     get:
       operationId: listPredictions
@@ -2605,7 +3291,7 @@ paths:
               schema:
                 $ref: '#/components/schemas/PredictionsListResponse'
               examples:
-                success:
+                authenticatedPredictionsPage:
                   value:
                     data:
                       - id: f47ac10b-58cc-4372-a567-0e02b2c3d479
@@ -2682,12 +3368,24 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ValidationErrorBody'
+              examples:
+                validationError:
+                  value:
+                    error:
+                      code: VALIDATION_ERROR
+                      details: Invalid stellar address
         '401':
           description: Unauthorized
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/ErrorBody'
+              examples:
+                unauthorized:
+                  value:
+                    error:
+                      code: UNAUTHORIZED
+                      requestId: req_xyz789
     delete:
       operationId: unfollowUser
       tags:
@@ -2726,12 +3424,24 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ValidationErrorBody'
+              examples:
+                validationError:
+                  value:
+                    error:
+                      code: VALIDATION_ERROR
+                      details: Invalid stellar address
         '401':
           description: Unauthorized
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/ErrorBody'
+              examples:
+                unauthorized:
+                  value:
+                    error:
+                      code: UNAUTHORIZED
+                      requestId: req_xyz789
   /api/admin/users/{address}:
     get:
       operationId: getAdminUser
@@ -2923,6 +3633,63 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ValidationErrorBody'
+        '401':
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '403':
+          description: Forbidden
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '429':
+          description: Rate limit exceeded
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+  /api/audit/counts:
+    get:
+      operationId: getAuditCounts
+      tags:
+        - Admin
+      summary: Per-action audit log counts summary for dashboards (admin only)
+      security:
+        - bearerAuth: []
+      parameters:
+        - schema:
+            type: string
+            format: date-time
+          required: false
+          name: startDate
+          in: query
+        - schema:
+            type: string
+            format: date-time
+          required: false
+          name: endDate
+          in: query
+      responses:
+        '200':
+          description: Audit log counts summary
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    $ref: '#/components/schemas/AuditCountsSummary'
+                required:
+                  - data
+        '400':
+          description: Invalid query parameters
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
         '401':
           description: Unauthorized
           content:
@@ -3286,231 +4053,54 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ErrorBody'
-  /api/quota/requests:
-    post:
-      operationId: createQuotaRequest
+  /api/admin/recon/markets/{id}:
+    get:
+      operationId: adminReconcileMarket
       tags:
-        - Quota
-      summary: Submit a quota increase request
+        - Admin
+      summary: On-demand market reconciliation (admin only)
       description: >-
-        Authenticated users can request an increase to their rate limits. Each user may have at most 5 pending requests
-        at a time.
+        Compares confirmed on-chain positions against the database snapshot for a single market and returns a structured
+        diff. Every call is audit-logged as `admin.reconciliation.market.inspect`. Returns `status: "partial"` when the
+        on-chain adapter is not yet wired.
       security:
         - bearerAuth: []
-      requestBody:
-        content:
-          application/json:
-            schema:
-              $ref: '#/components/schemas/CreateQuotaRequest'
-      responses:
-        '201':
-          description: Quota request created
-          content:
-            application/json:
-              schema:
-                type: object
-                properties:
-                  data:
-                    $ref: '#/components/schemas/QuotaRequest'
-                required:
-                  - data
-        '400':
-          description: Validation error or too many pending requests
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/ValidationErrorBody'
-        '401':
-          description: Unauthorized
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '403':
-          description: Forbidden
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '422':
-          description: Validation error
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/ValidationErrorBody'
-        '429':
-          description: Rate limit exceeded
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-    get:
-      operationId: listQuotaRequests
-      tags:
-        - Quota
-      summary: List quota requests for the authenticated user
-      description: Returns all quota requests submitted by the authenticated user, newest first.
-      security:
-        - bearerAuth: []
-      responses:
-        '200':
-          description: List of quota requests
-          content:
-            application/json:
-              schema:
-                type: object
-                properties:
-                  data:
-                    type: array
-                    items:
-                      $ref: '#/components/schemas/QuotaRequest'
-                required:
-                  - data
-        '401':
-          description: Unauthorized
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '403':
-          description: Forbidden
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '429':
-          description: Rate limit exceeded
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-  /api/leaderboard/global:
-    get:
-      operationId: getGlobalLeaderboard
-      tags:
-        - Leaderboard
-      summary: Global leaderboard across all markets
-      description: >-
-        Returns a paginated leaderboard ranking all users by their prediction accuracy and volume across **every**
-        market on the platform. Results are cached for 5 minutes. Pass `refresh=true` to force an immediate
-        materialized-view refresh (expensive; intended for admin/debug use).
-      parameters:
-        - schema:
-            type: integer
-            minimum: 0
-            exclusiveMinimum: true
-            maximum: 100
-            default: 50
-            description: Maximum entries to return (1–100, default 50)
-          required: false
-          description: Maximum entries to return (1–100, default 50)
-          name: limit
-          in: query
-        - schema:
-            type: integer
-            nullable: true
-            minimum: 0
-            default: 0
-            description: Zero-based row offset for pagination (default 0)
-          required: false
-          description: Zero-based row offset for pagination (default 0)
-          name: offset
-          in: query
-        - schema:
-            type: boolean
-            nullable: true
-            default: false
-            description: When true, triggers REFRESH MATERIALIZED VIEW CONCURRENTLY before querying
-          required: false
-          description: When true, triggers REFRESH MATERIALIZED VIEW CONCURRENTLY before querying
-          name: refresh
-          in: query
-      responses:
-        '200':
-          description: Paginated global leaderboard
-          content:
-            application/json:
-              schema:
-                type: object
-                properties:
-                  data:
-                    type: array
-                    items:
-                      $ref: '#/components/schemas/GlobalLeaderboardEntry'
-                  meta:
-                    type: object
-                    properties:
-                      limit:
-                        type: integer
-                      offset:
-                        type: integer
-                      count:
-                        type: integer
-                      refresh:
-                        type: boolean
-                    required:
-                      - limit
-                      - offset
-                      - count
-                      - refresh
-                required:
-                  - data
-                  - meta
-        '400':
-          description: Invalid query parameters
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/ValidationErrorBody'
-        '429':
-          description: Rate limit exceeded
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '500':
-          description: Internal server error
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-  /api/leaderboard/global/user/{stellarAddress}:
-    get:
-      operationId: getGlobalLeaderboardEntry
-      tags:
-        - Leaderboard
-      summary: Get a single user's global leaderboard entry
-      description: >-
-        Looks up the global leaderboard rank and stats for a specific Stellar address. Returns 404 when the address has
-        never placed a prediction.
       parameters:
         - schema:
             type: string
-            description: The user's Stellar public key (G…)
+            minLength: 1
+            maxLength: 255
+            description: Market ID
           required: true
-          description: The user's Stellar public key (G…)
-          name: stellarAddress
+          description: Market ID
+          name: id
           in: path
       responses:
         '200':
-          description: User's global leaderboard entry
+          description: Reconciliation result
           content:
             application/json:
               schema:
                 type: object
                 properties:
                   data:
-                    $ref: '#/components/schemas/GlobalLeaderboardEntry'
+                    $ref: '#/components/schemas/MarketReconciliationResult'
                 required:
                   - data
-        '404':
-          description: Address not found on the global leaderboard
+        '400':
+          description: Validation error — invalid market ID
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ValidationErrorBody'
+        '403':
+          description: Forbidden — missing or non-admin JWT
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/ErrorBody'
-        '429':
-          description: Rate limit exceeded
+        '404':
+          description: Market not found
           content:
             application/json:
               schema:
@@ -3528,30 +4118,27 @@ paths:
         - Webhooks
       summary: List live webhook deliveries (admin only)
       description: >-
-        Returns a cursor-paginated list of live webhook delivery records ordered newest-first
-        (by `createdAt` DESC, then `id` DESC as a stable tie-breaker). Only deliveries that
-        have not yet been dead-lettered are returned here; exhausted deliveries appear in the
-        DLQ at `GET /api/admin/webhooks/dlq`.
-
-        Requires an admin JWT (`role: "admin"`).
+        Returns a cursor-paginated list of live webhook delivery records ordered newest-first (by `createdAt` DESC, then
+        `id` DESC as a stable tie-breaker). Only deliveries that have not yet been dead-lettered are returned here;
+        exhausted deliveries appear in the DLQ at `GET /api/admin/webhooks/dlq`. Requires an admin JWT (`role:
+        "admin"`).
       security:
         - bearerAuth: []
       parameters:
-        - name: cursor
-          in: query
-          required: false
-          description: >-
-            Opaque keyset cursor returned by the previous page. Omit for the first page.
-          schema:
+        - schema:
             type: string
             minLength: 1
-        - name: limit
-          in: query
           required: false
-          description: Maximum number of records to return (positive integer, server default applies when omitted).
-          schema:
-            type: string
-            pattern: '^\d+$'
+          name: cursor
+          in: query
+        - schema:
+            type: integer
+            minimum: 0
+            exclusiveMinimum: true
+            maximum: 100
+          required: false
+          name: limit
+          in: query
       responses:
         '200':
           description: Paginated page of live webhook deliveries
@@ -3567,7 +4154,6 @@ paths:
                   nextCursor:
                     type: string
                     nullable: true
-                    description: Cursor to pass as `cursor` on the next request. Null on the last page.
                 required:
                   - data
                   - nextCursor
@@ -3580,7 +4166,8 @@ paths:
                         eventId: evt-market-resolved-001
                         eventType: market.resolved
                         targetUrl: https://example.com/hooks/predictify
-                        payloadBase64: eyJldmVudCI6Im1hcmtldC5yZXNvbHZlZCIsImlkIjoiZDFhMmIzYzQtMDAwMS00MDAwLTgwMDAtMDAwMDAwMDAwMDAxIiwidGltZXN0YW1wIjoiMjAyNi0wNy0yNVQxMjowMDowMC4wMDBaIiwibWFya2V0SWQiOiJtYXJrZXQtMDAxIiwid2lubmluZ091dGNvbWUiOiJ5ZXMiLCJsZWRnZXIiOjUwMDAwMDAsIm9uQ2hhaW5UaW1lc3RhbXAiOjE3NTM0NDAwMDB9
+                        payloadBase64: >-
+                          eyJldmVudCI6Im1hcmtldC5yZXNvbHZlZCIsImlkIjoiZDFhMmIzYzQtMDAwMS00MDAwLTgwMDAtMDAwMDAwMDAwMDAxIn0=
                         signature: sha256=abcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890
                         headers: null
                         status: delivered
@@ -3594,7 +4181,7 @@ paths:
                         eventId: evt-dispute-opened-001
                         eventType: dispute.opened
                         targetUrl: https://example.com/hooks/predictify
-                        payloadBase64: eyJldmVudCI6ImRpc3B1dGUub3BlbmVkIiwiaWQiOiJkMWEyYjNjNC0wMDAyLTQwMDAtODAwMC0wMDAwMDAwMDAwMDIiLCJ0aW1lc3RhbXAiOiIyMDI2LTA3LTI1VDExOjAwOjAwLjAwMFoiLCJtYXJrZXRJZCI6Im1hcmtldC0wMDEiLCJkaXNwdXRlSWQiOiJhYWFhYmJiYi1jY2NjLTRkZGQtOGVlZS1mZmZmZmZmZmZmZmYiLCJvcGVuZWRCeSI6IjExMTEyMjIyLTMzMzMtNDQ0NC01NTU1LTY2NjY2NjY2NjY2NiIsInJlYXNvbiI6IlJlc29sdXRpb24gc291cmNlIHdhcyBpbmNvcnJlY3QifQ==
+                        payloadBase64: eyJldmVudCI6ImRpc3B1dGUub3BlbmVkIn0=
                         signature: sha256=fedcba0987654321fedcba0987654321fedcba0987654321fedcba0987654321
                         headers: null
                         status: pending
@@ -3604,7 +4191,8 @@ paths:
                         nextAttemptAt: '2026-07-25T11:00:30.000Z'
                         createdAt: '2026-07-25T11:00:00.000Z'
                         updatedAt: '2026-07-25T11:00:00.000Z'
-                    nextCursor: eyJzb3J0VmFsdWUiOiIyMDI2LTA3LTI1VDExOjAwOjAwLjAwMFoiLCJpZCI6ImQxYTJiM2M0LTAwMDItNDAwMC04MDAwLTAwMDAwMDAwMDAwMiJ9
+                    nextCursor: >-
+                      eyJzb3J0VmFsdWUiOiIyMDI2LTA3LTI1VDExOjAwOjAwLjAwMFoiLCJpZCI6ImQxYTJiM2M0LTAwMDItNDAwMC04MDAwLTAwMDAwMDAwMDAwMiJ9
                 emptyPage:
                   summary: Empty page when no live deliveries exist
                   value:
@@ -3643,29 +4231,26 @@ paths:
         - Webhooks
       summary: List dead-lettered webhook deliveries (admin only)
       description: >-
-        Returns a cursor-paginated list of dead-lettered webhook deliveries ordered by
-        `failedAt` DESC. A delivery appears here after exhausting all retry attempts.
-
-        Use `POST /api/admin/webhooks/dlq/{id}/replay` to re-enqueue an individual entry.
-
-        Requires an admin JWT (`role: "admin"`).
+        Returns a cursor-paginated list of dead-lettered webhook deliveries ordered by `failedAt` DESC. A delivery
+        appears here after exhausting all retry attempts. Use `POST /api/admin/webhooks/dlq/{id}/replay` to re-enqueue
+        an individual entry. Requires an admin JWT (`role: "admin"`).
       security:
         - bearerAuth: []
       parameters:
-        - name: cursor
-          in: query
-          required: false
-          description: Opaque keyset cursor returned by the previous page. Omit for the first page.
-          schema:
+        - schema:
             type: string
             minLength: 1
-        - name: limit
-          in: query
           required: false
-          description: Maximum number of records to return (positive integer).
-          schema:
-            type: string
-            pattern: '^\d+$'
+          name: cursor
+          in: query
+        - schema:
+            type: integer
+            minimum: 0
+            exclusiveMinimum: true
+            maximum: 100
+          required: false
+          name: limit
+          in: query
       responses:
         '200':
           description: Paginated page of DLQ entries
@@ -3681,7 +4266,6 @@ paths:
                   nextCursor:
                     type: string
                     nullable: true
-                    description: Cursor to pass as `cursor` on the next request. Null on the last page.
                 required:
                   - data
                   - nextCursor
@@ -3714,7 +4298,7 @@ paths:
                         headers: null
                         attempts: 3
                         maxAttempts: 3
-                        lastError: 'connect ECONNREFUSED 192.0.2.1:443'
+                        lastError: connect ECONNREFUSED 192.0.2.1:443
                         failedAt: '2026-07-25T09:00:00.000Z'
                         replayedAt: '2026-07-25T09:30:00.000Z'
                         replayDeliveryId: eeee3333-cccc-4000-8000-000000000004
@@ -3743,26 +4327,20 @@ paths:
         - Webhooks
       summary: Replay a dead-lettered webhook delivery (admin only)
       description: >-
-        Re-enqueues a dead-lettered delivery as a fresh live delivery with `attempts = 0`.
-        The original payload bytes and signature are preserved verbatim so the subscriber
-        receives an identical signed request.
-
-        - Returns **202** with the new delivery ID on success.
-        - Returns **404** when the DLQ row does not exist.
-        - Returns **409** when the DLQ row has already been replayed (idempotency guard).
-        - Returns **400** when `id` is not a valid UUID.
-
-        Requires an admin JWT (`role: "admin"`).
+        Re-enqueues a dead-lettered delivery as a fresh live delivery with `attempts = 0`. The original payload bytes
+        and signature are preserved verbatim so the subscriber receives an identical signed request. Requires an admin
+        JWT (`role: "admin"`).
       security:
         - bearerAuth: []
       parameters:
-        - name: id
-          in: path
-          required: true
-          description: UUID of the DLQ row to replay
-          schema:
+        - schema:
             type: string
             format: uuid
+            description: UUID of the DLQ row to replay
+          required: true
+          description: UUID of the DLQ row to replay
+          name: id
+          in: path
       responses:
         '202':
           description: Replay accepted — a fresh live delivery has been enqueued
@@ -3856,14 +4434,202 @@ paths:
                       - type
                   replayDeliveryId:
                     type: string
-                    format: uuid
                     nullable: true
+                    format: uuid
+required:
+                      - error
+                      - replayDeliveryId
+                  examples:
+                    alreadyReplayed:
+                      summary: This DLQ row was already replayed — idempotency guard triggered
+                      value:
+                        error:
+                          type: already_replayed
+                        replayDeliveryId: ffff4444-dddd-4000-8000-000000000005
+
+  /api/invites:
+    post:
+      operationId: createInvite
+      tags:
+        - Invites
+      summary: Create a new invite
+      description: >
+        Creates an invite for the authenticated user. Rate-limited per user
+        with a token-bucket algorithm (60 tokens per 60 s window by default).
+      security:
+        - bearerAuth: []
+      responses:
+        '201':
+          description: Invite created
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: object
+                    properties:
+                      message:
+                        type: string
+                    required:
+                      - message
                 required:
-                  - error
+                  - data
+        '401':
+          description: Missing or invalid JWT
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '429':
+          description: Rate limit exceeded
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+    get:
+      operationId: listInvites
+      tags:
+        - Invites
+      summary: List invites for the authenticated user
+      description: >
+        Lists invites for the authenticated user. Subject to the same per-user
+        token-bucket rate limit as POST /api/invites.
+      security:
+        - bearerAuth: []
+      responses:
+        '200':
+          description: List of invites
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items:
+                      type: object
+                required:
+                  - data
+        '401':
+          description: Missing or invalid JWT
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '429':
+          description: Rate limit exceeded
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+  /api/referrals:
+    post:
+      operationId: createReferral
+      tags:
+        - Referrals
+      summary: Create a referral code
+      description: Creates a new referral code for the authenticated user.
+      security:
+        - bearerAuth: []
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                campaignId:
+                  type: string
+            examples:
+              success:
+                summary: Create referral request
+                value:
+                  campaignId: FWC26
+      responses:
+        '201':
+          description: Referral created
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: object
+                    properties:
+                      referralCode:
+                        type: string
+                      message:
+                        type: string
+                    required:
+                      - referralCode
+                      - message
+                required:
+                  - data
               examples:
-                alreadyReplayed:
-                  summary: This DLQ row was already replayed — idempotency guard triggered
+                success:
+                  summary: Referral code created successfully
                   value:
-                    error:
-                      type: already_replayed
-                    replayDeliveryId: ffff4444-dddd-4000-8000-000000000005
+                    data:
+                      referralCode: REF-ABC-123
+                      message: Referral created successfully
+        '401':
+          description: Missing or invalid JWT
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+    get:
+      operationId: listReferrals
+      tags:
+        - Referrals
+      summary: List user referrals
+      description: Lists all referrals made by the authenticated user.
+      security:
+        - bearerAuth: []
+      responses:
+        '200':
+          description: List of referrals
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        id:
+                          type: string
+                        referredUser:
+                          type: string
+                        status:
+                          type: string
+                          enum:
+                            - pending
+                            - completed
+                        createdAt:
+                          type: string
+                          format: date-time
+                      required:
+                        - id
+                        - referredUser
+                        - status
+                        - createdAt
+                required:
+                  - data
+              examples:
+                success:
+                  summary: Referral list
+                  value:
+                    data:
+                      - id: ref-001
+                        referredUser: GD2...
+                        status: completed
+                        createdAt: 2026-07-28T12:00:00Z
+        '401':
+          description: Missing or invalid JWT
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'

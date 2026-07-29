@@ -56,6 +56,37 @@ describe("Refresh Token Rotation and Lifecycle", () => {
   });
 
   describe("POST /api/auth/refresh", () => {
+    it("returns an ETag header on the response", async () => {
+      const validDate = new Date(Date.now() + 1000000);
+      const userId = "user-uuid-123";
+
+      mockLimit.mockResolvedValueOnce([
+        {
+          id: "token-uuid-1",
+          userId,
+          tokenHash: hashToken("valid-token"),
+          familyId: "family-uuid-999",
+          parentId: null,
+          expiresAt: validDate,
+          revokedAt: null,
+        },
+      ]);
+      mockLimit.mockResolvedValueOnce([
+        {
+          id: userId,
+          stellarAddress: "GC3O2R44K...STELLAR",
+          createdAt: new Date(),
+        },
+      ]);
+
+      const res = await request(app)
+        .post("/api/auth/refresh")
+        .send({ refreshToken: "valid-token" });
+
+      expect(res.status).toBe(200);
+      expect(res.headers.etag).toBeDefined();
+    });
+
     it("returns 400 if refreshToken is not provided or invalid", async () => {
       const res = await request(app).post("/api/auth/refresh").send({});
       expect(res.status).toBe(400);

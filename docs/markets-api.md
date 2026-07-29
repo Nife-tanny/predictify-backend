@@ -48,9 +48,67 @@ This endpoint uses **keyset (cursor) pagination** on `(createdAt DESC, id DESC)`
 
 - `400 validation_error` - invalid query parameters
 
-## `GET /api/markets/recommendations`
+### Conditional requests and caching
 
-Returns personalized market recommendations for the authenticated user.
+`GET /api/markets` supports strong ETags for conditional revalidation. Every
+response includes an `ETag` header and a `Cache-Control: no-cache` header.
+Clients may send an `If-None-Match` header with the latest ETag to receive a
+`304 Not Modified` response without a body when the market list has not
+changed.
+
+Example:
+
+```http
+GET /api/markets
+If-None-Match: "<etag>"
+```
+
+## `GET /api/markets/:id`
+
+Returns a single market by ID.
+
+### Path Parameters
+
+| Parameter | Type   | Required | Description        |
+|-----------|--------|----------|---------------------|
+| `id`      | string | yes      | The market's ID.    |
+
+### Response
+
+`200 OK`
+
+```json
+{
+  "data": {
+    "id": "market-1",
+    "question": "Will BTC close above $100k this quarter?",
+    "status": "active",
+    "resolutionTime": "2026-07-01T00:00:00.000Z",
+    "version": 1
+  }
+}
+```
+
+### Errors
+
+- `404 not_found` - no market exists with the given ID
+
+### Conditional requests and caching
+
+`GET /api/markets/:id` supports strong ETags for conditional revalidation on
+the same terms as the list endpoint: every `200` response includes an `ETag`
+and `Cache-Control: no-cache` header, and a matching `If-None-Match` header
+returns `304 Not Modified` with no body. A `404` response does not include an
+`ETag` header.
+
+## `GET /api/markets/recommendations` / `GET /api/recommendations`
+
+Returns personalized market recommendations for the authenticated user using keyset cursor pagination over `(created_at DESC, id DESC)`.
+
+### Query Parameters
+
+- `limit` *(optional, integer, default: 20, min: 1, max: 100)* – Number of items per page.
+- `cursor` *(optional, string)* – Opaque cursor token from the previous page's `nextCursor`.
 
 ### Authentication
 
@@ -71,38 +129,23 @@ Authorization: Bearer <token>
       "id": "market-1",
       "question": "Will BTC close above $100k this quarter?",
       "status": "active",
-      "resolutionTime": "2026-07-01T00:00:00.000Z"
+      "resolutionTime": "2026-07-01T00:00:00.000Z",
+      "createdAt": "2026-06-01T00:00:00.000Z"
     }
-  ]
+  ],
+  "nextCursor": "v1|24|2026-06-01T00:00:00.000Zmarket-1"
 }
 ```
+
 
 The endpoint excludes markets the user has already predicted on, prefers active
 non-archived markets related to terms from the user's prediction history, and
 falls back to recent active non-archived markets when there is no usable history
 or no related market is found.
 
-### ETag support
-
-`GET /api/markets` supports conditional revalidation through `ETag` and `If-None-Match`.
-On a matching revalidation request, the route responds with `304 Not Modified`
-and does not return a response body. Clients should treat the response as a
-cache revalidation success and reuse the previously cached representation.
-
-### Conditional requests and caching
-
-The public market listing endpoint supports strong ETags. Clients may send an
-`If-None-Match` header with the latest ETag to receive a `304 Not Modified`
-response without a body when the market list has not changed.
-
-Example:
-
-```http
-GET /api/markets
-If-None-Match: "<etag>"
-```
-
 ### Errors
 
 - `401 Unauthorized` when the bearer token is missing, malformed, invalid, or
   belongs to no known user.
+
+- `408 timeout` - The server aborted the request because it exceeded the maximum allowed duration.

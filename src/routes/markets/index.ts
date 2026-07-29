@@ -4,21 +4,29 @@ import {
   listUpcomingMarkets,
   getMarketById,
   updateMarket,
+  createMarket,
   VersionConflictError,
+  MarketAlreadyExistsError,
 } from "../../services/marketService";
 import { searchMarkets } from "../../repositories/marketRepository";
 import { requireAdmin, AuthenticatedRequest } from "../../middleware/auth";
 import { rateLimitAnon } from "../../middleware/rateLimitAnon";
+import { accessLog } from "../../middleware/accessLog";
+import { marketsCors } from "../../middleware/cors";
 import { listFeaturedMarkets } from "../../services/marketFeatureService";
 import { logger } from "../../config/logger";
+import type { Request, Response, NextFunction } from "express";
+const trackMarketsMetrics = (_name: string) => (_req: Request, _res: Response, next: NextFunction) => next();
 import { RouteErrorFactory } from "../../errors";
 import { conditionalGet } from "../../middleware/etag";
 import { recommendationsRouter } from "./recommendations";
 import { trendingRouter } from "./trending";
 import { tagsRouter } from "./tags";
 import { predictionCountRouter } from "./prediction-count";
+import { watchersRouter } from "./watchers";
 import { marketAuditRouter } from "../marketAudit";
 import { disputesRouter } from "../disputes";
+import { requestTimeout } from "../../middleware/timeout";
 import {
   listMarketsQuerySchema,
   searchMarketsQuerySchema,
@@ -26,20 +34,40 @@ import {
   upcomingMarketsQuerySchema,
   marketParamsSchema,
   patchMarketBodySchema,
+  createMarketBodySchema,
 } from "../../validators/markets";
+
+function trackMarketsMetrics(_action: string) {
+  return (_req: any, _res: any, next: any) => next();
+}
 
 export const marketsRouter = Router();
 
+/**
+ * Simple pass-through wrapper for market route metrics tracking.
+ * Wraps a named route handler so metrics middleware can distinguish
+ * list/search/featured/get/patch operations.
+ */
+function trackMarketsMetrics(_op: string): RequestHandler {
+  return (_req, _res, next) => next();
+}
+
+// Enforce CORS allowlist early so unapproved origins are rejected
+// before any processing (preflight responses cached via Access-Control-Max-Age).
+marketsRouter.use(marketsCors());
+marketsRouter.use(accessLog);
 marketsRouter.use(rateLimitAnon);
+marketsRouter.use(requestTimeout(10000));
 marketsRouter.use("/tags", tagsRouter);
 marketsRouter.use("/recommendations", recommendationsRouter);
 marketsRouter.use("/trending", trendingRouter);
 marketsRouter.use("/:id/recommendations", recommendationsRouter);
 marketsRouter.use("/:id/prediction-count", predictionCountRouter);
+marketsRouter.use("/:id/watchers", watchersRouter);
 marketsRouter.use("/:id/audit", marketAuditRouter);
 marketsRouter.use("/:id/disputes", disputesRouter);
 
-marketsRouter.get("/search", async (req, res, next) => {
+marketsRouter.get("/search", trackMarketsMetrics("search"), async (req, res, next) => {
   const reqId = String((req as { id?: unknown }).id ?? "anon");
   try {
     const parsed = searchMarketsQuerySchema.safeParse(req.query);
@@ -92,7 +120,7 @@ marketsRouter.get("/search", async (req, res, next) => {
   }
 });
 
-marketsRouter.get("/", async (req, res, next) => {
+marketsRouter.get("/", trackMarketsMetrics("list"), async (req, res, next) => {
   const reqId = String((req as { id?: unknown }).id ?? "anon");
   try {
     const parsed = listMarketsQuerySchema.safeParse(req.query);
@@ -129,7 +157,7 @@ marketsRouter.get("/", async (req, res, next) => {
   }
 });
 
-marketsRouter.get("/featured", async (req, res, next) => {
+marketsRouter.get("/featured", trackMarketsMetrics("featured"), async (req, res, next) => {
   const reqId = String((req as { id?: unknown }).id ?? "anon");
   try {
     const parsed = featuredMarketsQuerySchema.safeParse(req.query);
@@ -146,7 +174,7 @@ marketsRouter.get("/featured", async (req, res, next) => {
   }
 });
 
-marketsRouter.get("/upcoming", async (req, res, next) => {
+marketsRouter.get("/upcoming", trackMarketsMetrics("upcoming"), async (req, res, next) => {
   const reqId = String((req as { id?: unknown }).id ?? "anon");
   try {
     const parsed = upcomingMarketsQuerySchema.safeParse(req.query);
@@ -170,7 +198,7 @@ marketsRouter.get("/upcoming", async (req, res, next) => {
   }
 });
 
-marketsRouter.get("/:id", async (req, res, next) => {
+marketsRouter.get("/:id", trackMarketsMetrics("get"), async (req, res, next) => {
   const reqId = String((req as { id?: unknown }).id ?? "anon");
 
   try {
@@ -211,7 +239,7 @@ marketsRouter.get("/:id", async (req, res, next) => {
   }
 });
 
-marketsRouter.patch("/:id", requireAdmin, async (req: AuthenticatedRequest, res, next) => {
+marketsRouter.patch("/:id", trackMarketsMetrics("patch"), requireAdmin, async (req: AuthenticatedRequest, res, next) => {
   const reqId = String((req as { id?: unknown }).id ?? "anon");
   const adminAddress = req.user?.stellarAddress;
 
@@ -273,6 +301,77 @@ marketsRouter.patch("/:id", requireAdmin, async (req: AuthenticatedRequest, res,
     logger.error(
       { reqId, correlationId: reqId, marketId: req.params.id, adminAddress, err: e },
       "markets_patch_failed",
+    );
+    return next(e);
+  }
+});
+
+/**
+ * POST /api/markets — Create an off-chain market shell
+ *
+ * Admin-only endpoint. Creates a new market with canonical question, metadata, and resolution time.
+ * Markets are keyed by the on-chain ID supplied by the contract deployer.
+ * On creation, markets are assigned indexedLedger=0 and archived=false.
+ *
+ * Returns 201 with the created market.
+ * Returns 409 with error.code="market_exists" if the market ID is already in use.
+ * Returns 403 with error.code="forbidden" if the user is not an authorized admin.
+ */
+marketsRouter.post("/", requireAdmin, async (req: AuthenticatedRequest, res, next) => {
+  const reqId = String((req as { id?: unknown }).id ?? "anon");
+  const adminAddress = req.user?.stellarAddress;
+
+  try {
+    const parsedBody = createMarketBodySchema.safeParse(req.body);
+    if (!parsedBody.success) {
+      throw parsedBody.error;
+    }
+
+    const { id, question, resolutionTime, metadata } = parsedBody.data;
+
+    logger.info(
+      {
+        reqId,
+        correlationId: reqId,
+        marketId: id,
+        adminAddress,
+      },
+      "markets_create_attempt",
+    );
+
+    const created = await createMarket({
+      id,
+      question,
+      resolutionTime,
+      metadata: metadata ? JSON.parse(JSON.stringify(metadata)) : undefined,
+      adminAddress,
+    });
+
+    logger.info(
+      {
+        reqId,
+        correlationId: reqId,
+        marketId: id,
+        adminAddress,
+        version: created.version,
+        indexedLedger: created.indexedLedger,
+      },
+      "markets_create_success",
+    );
+
+    return res.status(201).json({ data: created });
+  } catch (e) {
+    if (e instanceof MarketAlreadyExistsError) {
+      logger.warn(
+        { reqId, correlationId: reqId, marketId: req.body?.id, adminAddress },
+        "markets_create_conflict",
+      );
+      return res.status(409).json({ error: { code: "market_exists" } });
+    }
+
+    logger.error(
+      { reqId, correlationId: reqId, marketId: req.body?.id, adminAddress, err: e },
+      "markets_create_failed",
     );
     return next(e);
   }

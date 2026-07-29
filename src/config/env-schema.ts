@@ -44,6 +44,12 @@ const baseSchema = z.object({
   PG_POOL_MAX: z.coerce.number().int().positive().default(10),
   PG_STATEMENT_TIMEOUT_MS: z.coerce.number().int().positive().default(5000),
 
+  // ── Webhook CORS ─────────────────────────────────────────
+  WEBHOOK_CORS_ALLOWED_ORIGINS: z.string().default(""),
+
+  // ── Markets CORS ─────────────────────────────────────────
+  MARKETS_CORS_ALLOWED_ORIGINS: z.string().default(""),
+
   // ── Geo-blocking ──────────────────────────────────────────
   GEO_BLOCKED_COUNTRIES: z.string().default("").transform((val) =>
     val.split(",").map((s) => s.trim().toUpperCase()).filter(Boolean),
@@ -58,11 +64,23 @@ const baseSchema = z.object({
   ANON_RATE_LIMIT_MAX: z.coerce.number().int().positive().default(60),
   TRUST_PROXY: z.coerce.boolean().default(false),
 
+  // ── Login rate limiting (per-IP, sliding window) ─────────
+  LOGIN_RATE_LIMIT_WINDOW_MS: z.coerce.number().int().positive().default(60_000),
+  LOGIN_RATE_LIMIT_MAX: z.coerce.number().int().positive().default(10),
+
   // ── Captcha gate (per-IP, unauthenticated endpoints) ─────
   /** Number of requests per IP per window before captcha is required (0 = disabled) */
   CAPTCHA_THRESHOLD: z.coerce.number().int().nonnegative().default(10),
   /** Sliding window length for captcha threshold tracking (ms) */
   CAPTCHA_WINDOW_MS: z.coerce.number().int().positive().default(60_000),
+
+  // ── Webhooks rate limiting (per user) ─────────────────────
+  WEBHOOKS_RATE_LIMIT_WINDOW_MS: z.coerce.number().int().positive().default(15 * 60 * 1000),
+  WEBHOOKS_RATE_LIMIT_MAX: z.coerce.number().int().positive().default(100),
+
+  // ── Invites rate limiting (per user, token bucket) ────────
+  INVITES_RATE_LIMIT_CAPACITY: z.coerce.number().int().positive().default(60),
+  INVITES_RATE_LIMIT_WINDOW_MS: z.coerce.number().int().positive().default(60_000),
 
   // ── Settle confirmer ──────────────────────────────────────
   SETTLE_CONFIRMER_POLL_INTERVAL_MS: z.coerce.number().int().positive().default(5_000),

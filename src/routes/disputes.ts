@@ -5,8 +5,13 @@ import { openDispute, DisputeError } from "../services/disputeService";
 import { validateHttpsUrl, validateSsrf } from "../utils/url";
 import { logger } from "../config/logger";
 import { RouteErrorFactory } from "../errors";
+import { compressResponse } from "../middleware/compression";
 
 export const disputesRouter = Router({ mergeParams: true });
+
+// Apply compression to all disputes responses — large payloads (≥ 1 KiB)
+// are gzip/deflate compressed based on the client's Accept-Encoding header.
+disputesRouter.use(compressResponse);
 
 const openDisputeSchema = z.object({
   reason: z.string().min(10).max(500),

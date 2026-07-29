@@ -10,13 +10,15 @@ jest.mock("../src/services/auditService", () => ({
   createAuditLog: jest.fn().mockResolvedValue(undefined),
 }));
 
+const MOCK_EXPIRES_AT = new Date(Date.now() + 300_000);
+
 jest.mock("../src/services/authChallengeService", () => ({
   generateNonce: jest.fn(() => "aaaa"),
   computeExpiresAt: jest.fn(() => new Date()),
   createChallenge: jest.fn((_addr: string) =>
     Promise.resolve({
       nonce: "abcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890",
-      expiresAt: new Date(Date.now() + 300_000),
+      expiresAt: MOCK_EXPIRES_AT,
     }),
   ),
   verifyAndConsume: jest.fn(() => Promise.resolve(null)),
@@ -77,6 +79,37 @@ describe("POST /api/auth/challenge", () => {
   }, 10000);
 
   it("supports ETag and returns 304 on match", async () => {
+    const res = await request(app)
+      .post("/api/auth/challenge")
+      .send({ stellarAddress: "GABSCDZCXMOO6CYNTHBGHAOE3RX72FRMNWK6O4FOXW6OBQATNWKBUUW6" });
+
+    expect(res.status).toBe(201);
+    expect(res.headers.etag).toBeDefined();
+
+    const etag = res.headers.etag;
+
+    const res304 = await request(app)
+      .post("/api/auth/challenge")
+      .set("If-None-Match", etag)
+      .send({ stellarAddress: "GABSCDZCXMOO6CYNTHBGHAOE3RX72FRMNWK6O4FOXW6OBQATNWKBUUW6" });
+
+    expect(res304.status).toBe(304);
+    expect(res304.body).toEqual({});
+  });
+
+  it("rate limits repeated challenge attempts for the same authenticated identity", async () => {
+    const address = "GABSCDZCXMOO6CYNTHBGHAOE3RX72FRMNWK6O4FOXW6OBQATNWKBUUW6";
+
+    for (let index = 0; index < 5; index += 1) {
+      const res = await request(app)
+        .post("/api/auth/challenge")
+        .send({ stellarAddress: address });
+
+      if (index < 4) {
+        expect(res.status).toBe(201);
+      }
+    }
+
     const res = await request(app)
       .post("/api/auth/challenge")
       .send({ stellarAddress: "GABSCDZCXMOO6CYNTHBGHAOE3RX72FRMNWK6O4FOXW6OBQATNWKBUUW6" });

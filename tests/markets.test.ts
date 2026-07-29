@@ -179,6 +179,28 @@ describe("GET /api/markets", () => {
     expect(res.status).toBe(400);
     expect(res.body).toMatchObject({ error: { code: "invalid_query" } });
   });
+
+  it("respects cursor pagination", async () => {
+    const markets = Array.from({ length: 5 }, (_, i) => ({
+      id: `market-${i + 1}`,
+      question: `Question ${i + 1}`,
+      status: "active",
+      resolutionTime: new Date("2026-07-01T00:00:00.000Z"),
+      createdAt: new Date(`2026-07-0${i + 1}T00:00:00.000Z`),
+      version: 1,
+    }));
+    setDbForTests(createMarketDb(markets));
+
+    const res = await request(createApp()).get("/api/markets?limit=2");
+    expect(res.status).toBe(200);
+    expect(res.body.data).toHaveLength(2);
+    expect(res.body.nextCursor).not.toBeNull();
+
+    const res2 = await request(createApp()).get(`/api/markets?limit=2&cursor=${res.body.nextCursor}`);
+    expect(res2.status).toBe(200);
+    expect(res2.body.data).toHaveLength(2);
+    expect(res2.body.data[0].id).not.toBe(res.body.data[0].id);
+  });
 });
 
 describe("GET /api/markets/:id", () => {
@@ -392,4 +414,37 @@ describe("GET /api/markets/tags", () => {
     expect(res.status).toBe(200);
     expect(res.body).toEqual({ data: [] });
   });
+});
+
+describe("GET /api/markets Timeout Validation", () => {
+  afterEach(() => {
+    setDbForTests(null);
+  });
+
+  it("returns 408 Request Timeout when the database query exceeds the timeout limit", async () => {
+    // Mock the database to simulate a delayed response
+    const mockDb = {
+      select: jest.fn(() => ({
+        from: jest.fn(() => ({
+          where: jest.fn(() => ({
+            orderBy: jest.fn(() => ({
+              limit: jest.fn(() => new Promise((resolve) => setTimeout(resolve, 11000))),
+            })),
+          })),
+        })),
+      })),
+    } as unknown as Database;
+
+    setDbForTests(mockDb);
+
+    const res = await request(createApp()).get("/api/markets");
+    
+    expect(res.status).toBe(408);
+    expect(res.body).toMatchObject({
+      error: {
+        code: "timeout",
+        message: "Request timeout exceeded"
+      }
+    });
+  }, 15000); // Give the test block enough time to complete
 });

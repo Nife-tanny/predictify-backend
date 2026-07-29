@@ -253,6 +253,24 @@ describe("GET /api/users/:address/predictions", () => {
       );
       expect(res.status).toBe(200);
     });
+
+    it("returns 400 validation_error for an unknown query key (strict schema)", async () => {
+      const res = await request(app).get(
+        predictionsUrl(VALID_ADDRESS, { status: "pending", evil: "drop" }),
+      );
+      expect(res.status).toBe(400);
+      expect(res.body.error.code).toBe("validation_error");
+      expect(mockGetUserPredictions).not.toHaveBeenCalled();
+    });
+
+    it("returns 400 for a cursor that is only whitespace", async () => {
+      const res = await request(app).get(
+        predictionsUrl(VALID_ADDRESS, { cursor: "   " }),
+      );
+      expect(res.status).toBe(400);
+      expect(res.body.error.code).toBe("validation_error");
+      expect(mockGetUserPredictions).not.toHaveBeenCalled();
+    });
   });
 
   // ── User lookup ───────────────────────────────────────────────────────────

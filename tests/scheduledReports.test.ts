@@ -16,15 +16,6 @@
  *   9. Correlation IDs in logs
  */
 
-// Mock requireAuth before any imports
-jest.mock("../src/middleware/requireAuth", () => ({
-  requireAuth: (req: any, _res: any, next: any) => {
-    req.user = { id: "test-user-id", stellarAddress: "GTEST" };
-    req.id = "test-request-id";
-    next();
-  },
-}));
-
 // Mock the database
 jest.mock("../src/db", () => {
   const mockDb = {
@@ -74,6 +65,11 @@ const mockGetRequestId = getRequestId as jest.MockedFunction<typeof getRequestId
 function makeApp(): express.Express {
   const app = express();
   app.use(express.json());
+  // Inject user directly since requireAuth is now in the parent reports router
+  app.use((req, _res, next) => {
+    (req as any).user = { id: "test-user-id", stellarAddress: "GTEST" };
+    next();
+  });
   app.use("/api/reports/scheduled", scheduledReportsRouter);
   app.use(errorHandler);
   return app;
@@ -787,17 +783,44 @@ describe("DELETE /api/reports/scheduled/:id", () => {
 });
 
 describe("Authentication", () => {
-  it("returns 401 when no auth token is provided", async () => {
-    // Override the mock to not attach user
-    jest.resetModules();
-    jest.doMock("../src/middleware/requireAuth", () => ({
-      requireAuth: (_req: any, res: any, _next: any) => {
-        res.status(401).json({ error: { code: "unauthenticated" } });
-      },
-    }));
+  let authApp: express.Express;
 
-    // Note: In a real test, you'd need to recreate the app with the new mock
-    // For this test, we're documenting the expected behavior
+  beforeAll(() => {
+    authApp = makeApp();
+  });
+
+  beforeEach(() => {
+    jest.clearAllMocks();
+    mockGetRequestId.mockReturnValue("test-correlation-id");
+  });
+
+  it("requires req.user.id (set by parent router's requireAuth)", async () => {
+    // Auth is enforced at the parent /api/reports level via requireAuth.
+    // The scheduled router reads req.user.id for ownership checks.
+    // This test verifies that a valid user ID flows through to route handlers.
+    const mockCreated = {
+      id: "report-id-auth",
+      userId: "test-user-id",
+      reportType: "predictions",
+      schedule: "0 2 * * *",
+      format: "csv",
+      filters: {},
+      active: true,
+      createdAt: new Date("2026-07-24T12:00:00Z"),
+      updatedAt: new Date("2026-07-24T12:00:00Z"),
+    };
+    mockDb.returning.mockResolvedValueOnce([mockCreated]);
+
+    const res = await request(authApp)
+      .post("/api/reports/scheduled")
+      .send({
+        reportType: "predictions",
+        schedule: "0 2 * * *",
+        format: "csv",
+      });
+
+    expect(res.status).toBe(201);
+    expect(res.body.data.userId).toBe("test-user-id");
   });
 });
 

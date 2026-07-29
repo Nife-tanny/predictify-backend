@@ -1,7 +1,8 @@
 import { getRequestId } from "../lib/requestContext";
+import { ErrorCodes } from "./codes";
 
 export interface ErrorEnvelope {
-  type: string;
+  code: string;
   message: string;
   correlationId: string;
   details?: Record<string, unknown>;
@@ -102,10 +103,20 @@ export const RouteErrorFactory = {
   },
 };
 
+const KIND_TO_CODE: Record<RouteError["kind"], string> = {
+  NotFound: ErrorCodes.NOT_FOUND,
+  Unauthorized: ErrorCodes.UNAUTHORIZED,
+  Forbidden: ErrorCodes.FORBIDDEN,
+  ValidationError: ErrorCodes.VALIDATION_ERROR,
+  Conflict: ErrorCodes.CONFLICT,
+  InternalError: ErrorCodes.INTERNAL_ERROR,
+  BadRequest: ErrorCodes.REQUEST_FAILED,
+};
+
 export function toErrorEnvelope(error: RouteError, correlationId?: string): ErrorEnvelope {
   const cid = correlationId ?? getRequestId() ?? "unknown";
   const envelope: ErrorEnvelope = {
-    type: error.kind,
+    code: KIND_TO_CODE[error.kind],
     message: error.kind === "InternalError" ? "An unexpected error occurred" : error.message,
     correlationId: cid,
   };

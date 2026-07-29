@@ -6,6 +6,10 @@ jest.mock("../src/middleware/requireAuth", () => ({
   },
 }));
 
+jest.mock("../src/middleware/idempotency", () => ({
+  idempotency: jest.fn((req: any, _res: any, next: any) => next()),
+}));
+
 jest.mock("../src/services/notificationService", () => ({
   markNotificationsAsRead: jest.fn(),
 }));
@@ -15,6 +19,7 @@ import request from "supertest";
 import { notificationsRouter } from "../src/routes/notifications";
 import { errorHandler } from "../src/middleware/errorHandler";
 import { markNotificationsAsRead } from "../src/services/notificationService";
+import { idempotency } from "../src/middleware/idempotency";
 
 const mockMarkNotificationsAsRead = markNotificationsAsRead as jest.MockedFunction<
   typeof markNotificationsAsRead
@@ -54,6 +59,7 @@ describe("notifications mark-read endpoint", () => {
         notificationIds: ["550e8400-e29b-41d4-a716-446655440000", "550e8400-e29b-41d4-a716-446655440001"],
         markAllAsRead: undefined,
       });
+      expect(idempotency).toHaveBeenCalled();
     });
 
     it("marks all unread notifications as read when markAllAsRead is true", async () => {

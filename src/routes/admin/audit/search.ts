@@ -3,6 +3,7 @@ import { z } from "zod";
 import { getAuditLogs } from "../../../repositories/auditLogRepo";
 import { getRequestId } from "../../../lib/requestContext";
 import { logger } from "../../../config/logger";
+import { startAuditSpan, endAuditSpan, recordErrorOnSpan } from "../../../otel/spans";
 
 const searchAuditSchema = z.object({
   action: z.string().optional(),
@@ -28,12 +29,15 @@ export const searchAuditLogsHandler = async (
   res: Response,
   next: NextFunction,
 ): Promise<void> => {
+  const span = startAuditSpan("audit.admin.search", req, res);
   try {
     const parseResult = searchAuditSchema.safeParse(req.body);
     const reqId = getRequestId() ?? (req as { id?: string }).id ?? "unknown";
 
     if (!parseResult.success) {
-      res.status(400).json({
+      res.status(400);
+      endAuditSpan(span, res);
+      res.json({
         error: {
           code: "validation_error",
           message: parseResult.error.issues[0]?.message ?? "invalid payload parameters",
@@ -57,11 +61,13 @@ export const searchAuditLogsHandler = async (
 
     const page = await getAuditLogs(filters);
 
+    endAuditSpan(span, res);
     res.json({
       data: page.data,
       nextCursor: page.nextCursor,
     });
   } catch (e) {
+    recordErrorOnSpan(span, e);
     next(e);
   }
 };
