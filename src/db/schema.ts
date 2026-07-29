@@ -605,3 +605,36 @@ export const marketWatchers = pgTable(
 export type MarketWatcher = typeof marketWatchers.$inferSelect;
 export type NewMarketWatcher = typeof marketWatchers.$inferInsert;
 
+// ---------------------------------------------------------------------------
+// Referrals
+// ---------------------------------------------------------------------------
+/**
+ * referrals — tracks referral codes created by users and their usage.
+ *
+ * Each row represents a referral code created by a user. When the code is
+ * used by another user, `referredUser` is populated with their Stellar address.
+ */
+export const referrals = pgTable(
+  "referrals",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    userId: uuid("user_id")
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
+    referralCode: text("referral_code").notNull().unique(),
+    campaignId: text("campaign_id"),
+    referredUser: text("referred_user"),
+    status: text("status").notNull().default("pending"),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+  },
+  (t) => ({
+    referralsUserIdIdx: index("referrals_user_id_idx").on(t.userId),
+    referralsCodeIdx: index("referrals_code_idx").on(t.referralCode),
+  }),
+);
+
+export type Referral = typeof referrals.$inferSelect;
+export type NewReferral = typeof referrals.$inferInsert;
+
