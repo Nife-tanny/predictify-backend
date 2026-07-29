@@ -556,6 +556,10 @@ export const scheduledReports = pgTable(
   (t) => ({
     scheduledReportsUserIdIdx: index("scheduled_reports_user_id_idx").on(t.userId),
     scheduledReportsActiveIdx: index("scheduled_reports_active_idx").on(t.active),
+    scheduledReportsUserCreatedAtIdx: index("scheduled_reports_user_created_at_idx").on(
+      t.userId,
+      t.createdAt.desc(),
+    ),
   }),
 );
 
